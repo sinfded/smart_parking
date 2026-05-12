@@ -1,0 +1,25 @@
+{
+  "name": "smart-parking",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "bun --filter web dev",
+    "dev:admin": "bun --filter admin dev",
+    "dev:mobile": "bun --filter mobile dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check",
+    "db:types": "supabase gen types typescript --local > packages/types/src/database.ts",
+    "db:reset": "supabase db reset"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0"
+  },
+  "packageManager": "bun@1.2.0",
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}

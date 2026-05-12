@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/edge/gateway/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/edge/gateway/.venv/lib/python3.11/site-packages"
+  ],
+  "css.lint.unknownAtRules": "ignore"
+}

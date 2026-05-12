@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.output/
+.nuxt/
+dist/
+.turbo/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# YOLO models (large binaries — download separately)
+*.pt
+
+# Capacitor native builds
+apps/mobile/android/
+apps/mobile/ios/
+
+# IDE
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

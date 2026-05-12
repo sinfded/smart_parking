@@ -1,0 +1,60 @@
+[project]
+name = "gateway"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    # Supabase
+    "supabase>=2.0.0",
+    "httpx>=0.27.0",
+    # MQTT
+    "aiomqtt>=2.3.0",
+    # Config + validation
+    "pydantic-settings>=2.4.0",
+    "python-dotenv>=1.0.0",
+    # Logging
+    "structlog>=24.4.0",
+    # Vision (optional — only needed when running detector.py)
+    # Install opencv via --extra pi or --extra pc, not here (they conflict)
+    "ultralytics>=8.3.0",
+    "numpy>=1.26.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+# opencv-python and opencv-python-headless conflict — install exactly one via the right extra
+pc = [
+    "opencv-python>=4.10.0",           # includes GUI / imshow — for dev workstations
+]
+pi = [
+    "opencv-python-headless>=4.10.0",  # no display required — for Pi / server deployment
+]
+gui = [
+    "PyQt6>=6.7.0",
+]
+dev = [
+    "mypy>=1.11.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+parking-gateway    = "gateway.main:main"
+parking-vision     = "gateway.vision.detector:main"     # Pi / headless
+parking-vision-pc  = "gateway.vision.detector_pc:main"  # PC with live preview window
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
