@@ -34,17 +34,21 @@ class SupabaseWriter:
             .eq("lot_id", self._s.lot_id)
             .eq("label", slot_label)
             .is_("deleted_at", "null")
-            .single()
+            .maybe_single()
             .execute()
         )
-        if resp.data:
+        if resp and resp.data:
             self._slot_cache[slot_label] = resp.data["id"]
             return resp.data["id"]
         log.warning("slot.not_found", label=slot_label)
         return None
 
     async def report_slot_state(self, slot_label: str, new_state: str) -> None:
-        slot_id = await self._resolve_slot(slot_label)
+        try:
+            slot_id = await self._resolve_slot(slot_label)
+        except Exception as exc:
+            log.error("supabase.resolve_failed", label=slot_label, error=str(exc))
+            return
         if slot_id is None:
             return
         assert self._client

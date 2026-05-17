@@ -1,23 +1,23 @@
 # Smart Parking
 
-Multi-tenant parking platform. Ultrasonic sensors detect occupancy, Tapo cameras verify it, a Raspberry Pi gateway bridges the edge to Supabase, and a Nuxt 3 admin dashboard ties it together.
+Multi-tenant smart parking platform. Ultrasonic sensors detect occupancy, a Raspberry Pi gateway bridges the edge to Supabase, and a Nuxt 3 admin dashboard ties it together.
 
 ```
-ESP32 sensors  ──MQTT──►  Pi gateway  ──RPC──►  Supabase  ◄──  Admin / User apps
-Tapo cameras   ──RTSP──►  Pi vision
+ESP32 (5 sensors) ──MQTT──► Pi gateway ──RPC──► Supabase ◄── Admin dashboard
+                                                          ◄── Mobile PWA
 ```
 
 ---
 
 ## Prerequisites
 
-| Tool | Purpose |
-|---|---|
-| [Bun](https://bun.sh) | JS runtime + package manager for all apps |
-| [uv](https://docs.astral.sh/uv/) | Python package manager for the gateway |
-| [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started) | Local database dev |
-| [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html) | ESP32 firmware |
-| Docker + Docker Compose | MQTT broker + gateway container on the Pi |
+| Tool | Version | Purpose |
+|---|---|---|
+| [Bun](https://bun.sh) | 1.x | JS runtime + package manager for all apps |
+| [uv](https://docs.astral.sh/uv/) | 0.4+ | Python package manager for the gateway |
+| [Supabase CLI](https://supabase.com/docs/guides/cli) | latest | Database migrations |
+| [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html) | latest | ESP32 firmware |
+| Docker + Docker Compose | — | MQTT broker + gateway on the Pi |
 
 ---
 
@@ -26,13 +26,15 @@ Tapo cameras   ──RTSP──►  Pi vision
 ### Hosted (production)
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Copy your project URL and anon key from **Settings > API**.
-3. Apply migrations:
+2. Copy your **project URL** and **anon key** (starts with `eyJ...`) from **Settings → API**.
+3. Apply the schema:
 
 ```bash
 supabase link --project-ref <your-project-ref>
 supabase db push
 ```
+
+> The single migration file is `supabase/migrations/0000_app.sql`. It creates all tables, RLS policies, functions, triggers, and enables Realtime on `slots` and `lots`.
 
 4. (Optional) Seed initial data:
 
@@ -44,7 +46,7 @@ supabase db execute --file supabase/seed.sql
 
 ```bash
 supabase start          # starts Postgres + Auth + Realtime + Studio
-supabase db reset       # applies all migrations + seed.sql from scratch
+supabase db reset       # applies migrations + seed.sql from scratch
 
 # Regenerate TypeScript types after schema changes
 supabase gen types typescript --local > packages/types/src/database.ts
@@ -54,42 +56,70 @@ Local Studio runs at `http://localhost:54323`.
 
 ---
 
-## 2. Edge layer (Raspberry Pi)
+## 2. Admin dashboard
 
-Everything below runs on the Pi. Copy the `edge/` folder to the Pi or clone the repo there.
+### Setup
 
-### 2a. Environment file
+```bash
+cd apps/admin
+bun install
+cp .env.example .env   # then fill in the values below
+bun run dev            # http://localhost:3000
+```
 
-Create `edge/gateway/.env` from the example:
+`.env`:
+
+```env
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...   # anon/public key
+```
+
+> Use the JWT anon key (starts with `eyJ`), not the `sb_publishable_` format — the Nuxt Supabase module requires a JWT.
+
+### Initial configuration
+
+After logging in for the first time:
+
+1. **Create a lot** — Lots → New lot. Copy the lot UUID from the URL.
+2. **Add slots** — open the lot → Slots → add each slot with a label matching what you will enter on the ESP32 (e.g. `S-01`, `S-02`).
+3. **Create a gateway user** — in Supabase Dashboard → Authentication → Users → Invite user. Use a dedicated email (e.g. `gateway-lot1@yourapp.com`). Then insert a row in the `gateways` table linking `auth_user_id` to `lot_id`.
+4. **Register devices** — Devices → Add device → select `ultrasonic`, enter the ESP32 MAC address, select the lot and slot.
+
+---
+
+## 3. Edge layer (Raspberry Pi)
+
+### 3a. Environment file
 
 ```bash
 cp edge/gateway/.env.example edge/gateway/.env
 ```
 
-Edit it with your values:
+Fill in `edge/gateway/.env`:
 
 ```env
-# Supabase — use the gateway service account key (NOT anon, NOT service_role)
+# Supabase
 SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_KEY=<gateway-publishable-key>
+SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...   # anon/public key
 
 # Gateway identity — must match a row in the gateways table
-GATEWAY_EMAIL=gateway@yourdomain.com
+LOT_ID=<lot-uuid>
+GATEWAY_EMAIL=gateway-lot1@yourapp.com
 GATEWAY_PASSWORD=<gateway-password>
 
 # MQTT broker (Mosquitto running on this Pi)
 MQTT_BROKER_HOST=localhost
 MQTT_BROKER_PORT=1883
 
-# Camera detection thresholds (optional — can also be set in the admin UI)
-CAMERA_CONFIDENCE=0.35
-CAMERA_DEBOUNCE_FRAMES=3
-CAMERA_MIN_DURATION=5
-API_HOST=0.0.0.0
-API_PORT=8000
+# Debounce thresholds (optional — defaults shown)
+DISTANCE_OCCUPIED_CM=80.0
+DISTANCE_FREE_CM=120.0
+ROLLING_WINDOW=5
+CONFIRM_READINGS=3
+COOLDOWN_SECONDS=10
 ```
 
-### 2b. Start MQTT broker + gateway (Docker)
+### 3b. Start with Docker (recommended)
 
 ```bash
 cd edge
@@ -97,8 +127,8 @@ docker compose up -d
 ```
 
 This starts:
-- **Mosquitto** on port `1883` — receives readings from all ESP32 sensors
-- **Gateway service** — subscribes to MQTT, debounces readings, pushes state to Supabase via `report_slot_state` RPC
+- **Mosquitto** on port `1883` — receives readings from all ESP32s
+- **Gateway service** — subscribes to MQTT, debounces readings, calls `report_slot_state` RPC
 
 View logs:
 
@@ -107,57 +137,28 @@ docker compose logs -f gateway
 docker compose logs -f mosquitto
 ```
 
-### 2c. Run the gateway without Docker (uv)
+### 3c. Run without Docker (uv)
 
 ```bash
 cd edge/gateway
-uv sync --extra pi
-uv run parking-gateway
+uv sync
+uv run python -m gateway.main
 ```
 
-### 2d. Vision detector (Pi — headless)
+### 3d. Run as a systemd service
 
-The vision detector opens RTSP streams from the Tapo cameras, runs YOLO inference, and updates slot state in Supabase when the camera disagrees with the sensor.
-
-Install and run:
-
-```bash
-cd edge/gateway
-uv sync --extra pi        # installs opencv-python-headless
-
-# Run with lot auto-detected (only works if there is exactly one lot)
-uv run parking-vision --lot <lot-uuid>
-
-# Specify a lighter model explicitly (yolov8n is the default on Pi)
-uv run parking-vision --lot <lot-uuid> --model yolov8n.pt
-
-# Credentials from env — or pass as flags
-uv run parking-vision --lot <lot-uuid> --email gateway@yourdomain.com --password <pw>
-```
-
-The detector exposes a local HTTP API on port `8000`:
-
-| Endpoint | Description |
-|---|---|
-| `GET /` | Live camera feed dashboard |
-| `GET /status` | Slot occupancy summary (JSON) |
-| `GET /events` | Recent enter/exit events (JSON) |
-| `GET /stream/{n}` | MJPEG stream for camera `n` |
-
-#### Run as a systemd service on the Pi
-
-Create `/etc/systemd/system/parking-vision.service`:
+Create `/etc/systemd/system/parking-gateway.service`:
 
 ```ini
 [Unit]
-Description=Smart Parking Vision Detector
+Description=Smart Parking Gateway
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 WorkingDirectory=/home/pi/smart_parking/edge/gateway
 EnvironmentFile=/home/pi/smart_parking/edge/gateway/.env
-ExecStart=/home/pi/smart_parking/edge/gateway/.venv/bin/parking-vision --lot <lot-uuid>
+ExecStart=/home/pi/smart_parking/edge/gateway/.venv/bin/python -m gateway.main
 Restart=on-failure
 RestartSec=5
 
@@ -167,126 +168,141 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable parking-vision
-sudo systemctl start parking-vision
-sudo journalctl -u parking-vision -f
+sudo systemctl enable parking-gateway
+sudo systemctl start parking-gateway
+sudo journalctl -u parking-gateway -f
 ```
-
----
-
-## 3. Vision detector (PC — with live preview window)
-
-Useful for development, slot region drawing, and debugging camera angles.
-
-```bash
-cd edge/gateway
-uv sync --extra pc        # installs opencv-python (with GUI)
-
-# Interactive lot picker + live cv2 preview window
-uv run parking-vision-pc
-
-# Non-interactive (lot UUID known)
-uv run parking-vision-pc --lot <lot-uuid>
-
-# Use a larger model (PC can handle it)
-uv run parking-vision-pc --lot <lot-uuid> --model yolov8s.pt
-
-# Headless mode (no window — stream via HTTP only)
-uv run parking-vision-pc --lot <lot-uuid> --no-display
-```
-
-Press **Q** or **Esc** in the preview window to stop.
 
 ---
 
 ## 4. ESP32 firmware
 
-One ESP32 + HC-SR04 sensor per parking slot.
+Each ESP32 drives up to **5 HC-SR04 ultrasonic sensors**. Configuration is done via a built-in web portal — no reflashing needed to change settings.
 
-### Configure
+### Install PlatformIO
 
-Edit `edge/firmware/platformio.ini` and set the `build_flags` for each device:
-
-```ini
-build_flags =
-    -DWIFI_SSID=\"your_wifi_ssid\"
-    -DWIFI_PASS=\"your_wifi_password\"
-    -DMQTT_HOST=\"192.168.0.x\"   ; Pi's local IP
-    -DMQTT_PORT=1883
-    -DLOT_ID=\"<lot-uuid>\"
-    -DSLOT_LABEL=\"A-01\"          ; unique per slot, must match slots table
-    -DTRIGGER_PIN=5
-    -DECHO_PIN=18
+```bash
+python3 -m venv ~/.platformio-venv
+~/.platformio-venv/bin/pip install platformio
+echo 'export PATH="$HOME/.platformio-venv/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 ### Flash
 
+Connect the ESP32 via USB, then:
+
 ```bash
 cd edge/firmware
 
-# Build and upload
+# Build and upload (downloads toolchain on first run — takes a few minutes)
 pio run --target upload
 
-# Monitor serial output
-pio device monitor --baud 115200
+# Open serial monitor
+pio device monitor
 ```
 
-Each ESP32 publishes to `parking/<lot_id>/slot/<slot_label>/state` at 1 Hz.
+If the upload hangs at `Connecting......`, hold the **BOOT** button on the ESP32 until it says `Writing...`, then release.
+
+### Provision via web portal
+
+On first boot (or after a factory reset), the ESP32 broadcasts a Wi-Fi access point:
+
+1. Connect your phone or laptop to **`SmartParking-Setup`**
+2. Open **`192.168.4.1`** in a browser (the page opens automatically as a captive portal on most phones)
+3. Fill in the form:
+
+| Field | Value |
+|---|---|
+| Wi-Fi SSID | Your parking lot Wi-Fi network |
+| Wi-Fi password | Wi-Fi password |
+| MQTT broker IP | Pi's local IP address (e.g. `192.168.0.110`) |
+| MQTT port | `1883` |
+| Lot ID | UUID from the admin dashboard |
+| Slot label 1–5 | Must exactly match slot labels created in admin (e.g. `S-01`). Leave blank to disable a sensor. |
+| Trigger / Echo pins | GPIO pin numbers per sensor (see default wiring below) |
+
+4. Tap **Save and reboot** — the ESP32 connects to Wi-Fi and starts publishing readings.
+
+### Default pin wiring (5 sensors)
+
+| Sensor | TRIG | ECHO |
+|--------|------|------|
+| 1 | 5 | 18 |
+| 2 | 13 | 19 |
+| 3 | 14 | 21 |
+| 4 | 23 | 22 |
+| 5 | 25 | 26 |
+
+### Factory reset
+
+Hold the **BOOT** button (GPIO 0) for **3 seconds** while the ESP32 is running. The serial monitor will show:
+
+```
+[boot] Config cleared — rebooting.
+```
+
+The device will restart and broadcast `SmartParking-Setup` again.
+
+### Find the ESP32 MAC address
+
+The MAC address is printed in the serial monitor on every boot:
+
+```
+[wifi] Connected.
+[mqtt] Connected to 192.168.0.110:1883
+```
+
+It is also part of the MQTT client ID (e.g. `esp32-aabbccddeeff`). Use this when registering the device in the admin panel under **Devices**.
+
+### Monitor live readings
+
+From any machine on the same network as the Pi:
+
+```bash
+mosquitto_sub -h <pi-ip> -t "parking/#" -v
+```
 
 ---
 
-## 5. Admin dashboard
+## 5. Mobile PWA
+
+Browse-only app for users to check live slot availability.
 
 ```bash
-cd apps/admin
+cd apps/mobile
 bun install
-
-# Create env file
-cp .env.example .env
-# Set SUPABASE_URL and SUPABASE_ANON_KEY inside .env
-
-bun run dev      # http://localhost:3000
-bun run build    # production build
-bun run preview  # preview production build
-```
-
----
-
-## 6. User web app
-
-```bash
-cd apps/web
-bun install
+cp .env.example .env   # same SUPABASE_URL and SUPABASE_KEY as admin
 bun run dev
 ```
 
+No authentication required — the app reads public lot data directly from Supabase.
+
 ---
 
-## 7. Run everything (dev monorepo)
-
-From the repo root:
+## 6. Run everything (monorepo)
 
 ```bash
 bun install
 
-bun --filter admin dev    # admin dashboard
-bun --filter web dev      # user app
+bun --filter admin dev    # admin dashboard  → http://localhost:3000
+bun --filter mobile dev   # mobile PWA       → http://localhost:3001
 bun run build             # build all apps
 ```
 
 ---
 
-## MQTT topic schema
+## Architecture reference
+
+### MQTT topic schema
 
 ```
-parking/<lot_id>/slot/<slot_label>/state    {"distance_cm": 42, "ts": 12345}
+parking/<lot_id>/slot/<slot_label>/state    {"distance_cm": "42.3", "ts": "2026-05-16T14:23:01+08:00"}
 parking/<lot_id>/device/<mac>/health        {"rssi": -67, "uptime": 12345}
 parking/<lot_id>/gateway/heartbeat          {"ts": "..."}
 ```
 
----
-
-## Slot state machine
+### Slot state machine
 
 ```
 unknown → free → occupied → free → ...
@@ -298,11 +314,7 @@ unknown → free → occupied → free → ...
 
 State changes always go through the `report_slot_state` RPC — never a direct `UPDATE`.
 
----
-
-## Debounce rules
-
-The Pi gateway applies these rules before writing to Supabase:
+### Debounce rules (Pi gateway)
 
 1. ESP32 samples at 1 Hz and sends every reading.
 2. Gateway keeps a 5-reading rolling window per slot.
@@ -310,4 +322,12 @@ The Pi gateway applies these rules before writing to Supabase:
 4. `< 80 cm` = occupied · `> 120 cm` = free · in-between = ignored.
 5. 10-second cooldown after each confirmed change.
 
-Constants are in [`edge/gateway/gateway/config.py`](edge/gateway/gateway/config.py).
+Thresholds are tunable via `.env` — see `edge/gateway/gateway/config.py`.
+
+### Design rules
+
+- ESP32s never talk directly to Supabase — all writes go through the Pi gateway.
+- Slot state changes go through `report_slot_state` RPC only (atomic: updates slot + appends event + opens/closes session).
+- Each Pi has its own Supabase auth user registered in the `gateways` table.
+- Soft deletes only on `lots` and `slots` — use `deleted_at`, never `DELETE`.
+- Every domain table has a `lot_id` column gated by RLS.

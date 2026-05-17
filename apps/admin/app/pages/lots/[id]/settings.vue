@@ -10,7 +10,7 @@ const { data: lot, refresh: refreshLot } = await useLazyAsyncData(
   async () => {
     const { data } = await client
       .from("lots")
-      .select("id, name, address, timezone, is_public")
+      .select("id, name, address, timezone, is_public, location")
       .eq("id", lotId)
       .is("deleted_at", null)
       .single();
@@ -40,6 +40,8 @@ const lotForm = reactive({
   address: "",
   timezone: "Asia/Manila",
   is_public: true,
+  lat: "" as string,
+  lng: "" as string,
 });
 
 watch(
@@ -50,13 +52,38 @@ watch(
     lotForm.address = v.address ?? "";
     lotForm.timezone = v.timezone;
     lotForm.is_public = v.is_public;
+    // location comes back from PostgREST as GeoJSON
+    const loc = v.location as { coordinates?: [number, number] } | null;
+    if (loc?.coordinates) {
+      lotForm.lng = String(loc.coordinates[0]);
+      lotForm.lat = String(loc.coordinates[1]);
+    }
   },
   { immediate: true },
 );
 
+const locating = ref(false);
+function useMyLocation() {
+  if (!navigator.geolocation) return;
+  locating.value = true;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      lotForm.lat = pos.coords.latitude.toFixed(7);
+      lotForm.lng = pos.coords.longitude.toFixed(7);
+      locating.value = false;
+    },
+    () => { locating.value = false; },
+  );
+}
+
 const savingLot = ref(false);
 async function saveLot() {
   savingLot.value = true;
+  const lat = parseFloat(lotForm.lat);
+  const lng = parseFloat(lotForm.lng);
+  const location = !isNaN(lat) && !isNaN(lng)
+    ? `POINT(${lng} ${lat})`   // PostGIS: longitude first
+    : null;
   await client
     .from("lots")
     .update({
@@ -64,6 +91,7 @@ async function saveLot() {
       address: lotForm.address.trim() || null,
       timezone: lotForm.timezone.trim(),
       is_public: lotForm.is_public,
+      ...(location !== undefined && { location }),
     })
     .eq("id", lotId);
   await refreshLot();
@@ -151,6 +179,34 @@ async function saveGateway() {
               placeholder="123 Main St"
             />
           </div>
+          <div class="space-y-2">
+            <Label>GPS location</Label>
+            <div class="flex gap-2">
+              <Input
+                v-model="lotForm.lat"
+                placeholder="Latitude (e.g. 14.5995)"
+                type="number"
+                step="any"
+              />
+              <Input
+                v-model="lotForm.lng"
+                placeholder="Longitude (e.g. 120.9842)"
+                type="number"
+                step="any"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              :disabled="locating"
+              @click="useMyLocation"
+            >
+              <Spinner v-if="locating" class="mr-2 size-3.5" />
+              Use my location
+            </Button>
+          </div>
+
           <div class="space-y-2">
             <Label for="lot-tz">Timezone</Label>
             <Input

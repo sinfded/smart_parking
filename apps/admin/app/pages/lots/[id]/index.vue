@@ -114,9 +114,16 @@ async function onSlotUpdated() {
 // ── Realtime ───────────────────────────────────────────────────────────────────
 let realtimeChannel: ReturnType<typeof client.channel> | null = null;
 
+const CHANNEL_NAME = `slots-lot-${lotId}`;
+
 onMounted(() => {
+  // Remove any stale channel with the same name left over from a previous mount
+  client.getChannels()
+    .filter(ch => ch.topic === `realtime:${CHANNEL_NAME}`)
+    .forEach(ch => client.removeChannel(ch));
+
   realtimeChannel = client
-    .channel(`slots-lot-${lotId}`)
+    .channel(CHANNEL_NAME)
     .on(
       "postgres_changes",
       {
