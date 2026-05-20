@@ -9,7 +9,7 @@
 // ============================================================================
 
 export const CANVAS_SIZE  = 10_000 as const;
-export const DEFAULT_GRID = 100    as const; // 1 m
+export const DEFAULT_GRID = 50     as const; // 0.5 m
 export const SLOT_W       = 250    as const; // 2.5 m
 export const SLOT_H       = 500    as const; // 5.0 m
 export const ROAD_W       = 350    as const; // 3.5 m
@@ -24,6 +24,7 @@ export type ToolType =
   | 'select'
   | 'slot'
   | 'road'
+  | 'boundary'
   | 'entrance'
   | 'exit'
   | 'camera'
@@ -40,6 +41,7 @@ export type RoadDir      = 'one-way' | 'two-way';
 export type ElementType =
   | 'parking_slot'
   | 'road'
+  | 'boundary'
   | 'entrance'
   | 'exit'
   | 'camera'
@@ -126,9 +128,19 @@ export interface LabelEl extends Base {
   rotation: number;
 }
 
+export interface BoundaryEl extends Base {
+  type:        'boundary';
+  /** Flat array [x0,y0, x1,y1, …] — rendered as a closed polygon */
+  points:      number[];
+  strokeColor: string;
+  strokeWidth: number;
+  fillOpacity: number;
+}
+
 export type LotElement =
   | ParkingSlotEl
   | RoadEl
+  | BoundaryEl
   | EntranceEl
   | ExitEl
   | CameraEl

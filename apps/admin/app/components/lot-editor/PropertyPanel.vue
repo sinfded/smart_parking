@@ -3,6 +3,7 @@ import type {
   LotElement,
   ParkingSlotEl,
   RoadEl,
+  BoundaryEl,
   EntranceEl,
   ExitEl,
   CameraEl,
@@ -41,10 +42,50 @@ const asMarker = computed(() => {
 });
 const asCamera = computed(() => props.element?.type === 'camera' ? props.element as CameraEl : null);
 const asSensor = computed(() => props.element?.type === 'sensor' ? props.element as SensorEl : null);
-const asLabel  = computed(() => props.element?.type === 'label'  ? props.element as LabelEl : null);
+const asLabel    = computed(() => props.element?.type === 'label'    ? props.element as LabelEl    : null);
+const asBoundary = computed(() => props.element?.type === 'boundary' ? props.element as BoundaryEl : null);
 
 function upd(patch: Partial<LotElement>) {
   if (props.element) emit('update', props.element.id, patch);
+}
+
+// ── Boundary helpers ──────────────────────────────────────────────────────────
+
+interface BoundarySegment {
+  index:  number;
+  x0: number; y0: number;
+  x1: number; y1: number;
+  lengthCm: number;
+}
+
+const boundarySegments = computed<BoundarySegment[]>(() => {
+  const b = asBoundary.value;
+  if (!b) return [];
+  const n = b.points.length / 2;
+  const out: BoundarySegment[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const x0 = b.points[i * 2]!;
+    const y0 = b.points[i * 2 + 1]!;
+    const x1 = b.points[j * 2]!;
+    const y1 = b.points[j * 2 + 1]!;
+    out.push({ index: i, x0, y0, x1, y1, lengthCm: Math.round(Math.hypot(x1 - x0, y1 - y0)) });
+  }
+  return out;
+});
+
+function updateSegmentLength(seg: BoundarySegment, newCm: number) {
+  const b = asBoundary.value;
+  if (!b || newCm <= 0) return;
+  const dx = seg.x1 - seg.x0;
+  const dy = seg.y1 - seg.y0;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return;
+  const j = (seg.index + 1) % (b.points.length / 2);
+  const newPts = [...b.points];
+  newPts[j * 2]     = seg.x0 + (dx / len) * newCm;
+  newPts[j * 2 + 1] = seg.y0 + (dy / len) * newCm;
+  upd({ points: newPts } as any);
 }
 
 const CATEGORIES: Array<{ value: SlotCategory; label: string }> = [
@@ -61,6 +102,47 @@ const ROAD_DIRS: Array<{ value: RoadDir; label: string }> = [
   { value: 'two-way', label: 'Two-way' },
   { value: 'one-way', label: 'One-way' },
 ];
+
+// ── Road helpers ──────────────────────────────────────────────────────────────
+
+interface RoadSegment {
+  index:  number;
+  x0: number; y0: number;
+  x1: number; y1: number;
+  lengthCm: number;
+}
+
+const roadSegments = computed<RoadSegment[]>(() => {
+  const r = asRoad.value;
+  if (!r) return [];
+  const n = r.points.length / 2;
+  const out: RoadSegment[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const x0 = r.points[i * 2]!;
+    const y0 = r.points[i * 2 + 1]!;
+    const x1 = r.points[(i + 1) * 2]!;
+    const y1 = r.points[(i + 1) * 2 + 1]!;
+    out.push({ index: i, x0, y0, x1, y1, lengthCm: Math.round(Math.hypot(x1 - x0, y1 - y0)) });
+  }
+  return out;
+});
+
+const roadTotalLength = computed(() =>
+  roadSegments.value.reduce((sum, s) => sum + s.lengthCm, 0),
+);
+
+function updateRoadSegmentLength(seg: RoadSegment, newCm: number) {
+  const r = asRoad.value;
+  if (!r || newCm <= 0) return;
+  const dx = seg.x1 - seg.x0;
+  const dy = seg.y1 - seg.y0;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return;
+  const newPts = [...r.points];
+  newPts[(seg.index + 1) * 2]     = seg.x0 + (dx / len) * newCm;
+  newPts[(seg.index + 1) * 2 + 1] = seg.y0 + (dy / len) * newCm;
+  upd({ points: newPts } as any);
+}
 </script>
 
 <template>
@@ -214,6 +296,30 @@ const ROAD_DIRS: Array<{ value: RoadDir; label: string }> = [
             <input type="color" :value="asRoad.color" class="h-8 w-10 rounded border cursor-pointer p-0.5"
               @input="upd({ color: ($event.target as HTMLInputElement).value })" />
           </div>
+
+          <Separator />
+
+          <!-- Segment lengths -->
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+              <label class="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Segment lengths (cm)</label>
+              <span class="text-[10px] text-muted-foreground tabular-nums">Total: {{ roadTotalLength }} cm</span>
+            </div>
+            <p class="text-[10px] text-muted-foreground">Editing a segment moves its end point along the same direction.</p>
+            <div class="space-y-2 mt-2">
+              <div v-for="seg in roadSegments" :key="seg.index" class="flex items-center gap-2">
+                <span class="text-[11px] text-muted-foreground w-14 shrink-0">Seg {{ seg.index + 1 }}</span>
+                <Input
+                  type="number"
+                  min="1"
+                  :model-value="seg.lengthCm"
+                  class="h-7 text-xs"
+                  @update:model-value="updateRoadSegmentLength(seg, Number($event))"
+                />
+                <span class="text-[10px] text-muted-foreground shrink-0">cm</span>
+              </div>
+            </div>
+          </div>
         </div>
       </template>
 
@@ -270,6 +376,52 @@ const ROAD_DIRS: Array<{ value: RoadDir; label: string }> = [
               <option value="">— unlinked —</option>
               <option v-for="s in dbSlots" :key="s.id" :value="s.id">{{ s.label }}</option>
             </select>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── Boundary ─────────────────────────────────────────────────────── -->
+      <template v-else-if="asBoundary">
+        <div class="p-4 space-y-4">
+          <!-- Appearance -->
+          <div class="space-y-1.5">
+            <label class="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Line color</label>
+            <div class="flex items-center gap-2">
+              <input type="color" :value="asBoundary.strokeColor" class="h-8 w-10 rounded border cursor-pointer p-0.5"
+                @input="upd({ strokeColor: ($event.target as HTMLInputElement).value } as any)" />
+              <span class="text-xs text-muted-foreground">{{ asBoundary.strokeColor }}</span>
+            </div>
+          </div>
+          <div class="space-y-1.5">
+            <label class="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Fill opacity</label>
+            <div class="flex items-center gap-2">
+              <input type="range" min="0" max="0.5" step="0.01" :value="asBoundary.fillOpacity" class="flex-1 h-2"
+                @input="upd({ fillOpacity: Number(($event.target as HTMLInputElement).value) } as any)" />
+              <span class="text-xs tabular-nums w-8 text-right">{{ Math.round(asBoundary.fillOpacity * 100) }}%</span>
+            </div>
+          </div>
+
+          <Separator />
+
+          <!-- Segment lengths -->
+          <div class="space-y-1.5">
+            <label class="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+              Side lengths (cm)
+            </label>
+            <p class="text-[10px] text-muted-foreground">Changing a length moves the far endpoint along the same direction.</p>
+            <div class="space-y-2 mt-2">
+              <div v-for="seg in boundarySegments" :key="seg.index" class="flex items-center gap-2">
+                <span class="text-[11px] text-muted-foreground w-10 shrink-0">Side {{ seg.index + 1 }}</span>
+                <Input
+                  type="number"
+                  min="1"
+                  :model-value="seg.lengthCm"
+                  class="h-7 text-xs"
+                  @update:model-value="updateSegmentLength(seg, Number($event))"
+                />
+                <span class="text-[10px] text-muted-foreground shrink-0">cm</span>
+              </div>
+            </div>
           </div>
         </div>
       </template>

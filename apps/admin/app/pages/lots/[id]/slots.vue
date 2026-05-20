@@ -129,7 +129,15 @@ async function deleteSlot(slotId: string) {
 }
 
 // ── CSV export ────────────────────────────────────────────────────────────────
+const showExportDialog = ref(false);
 const exportLoading = ref(false);
+
+function todayLocal() {
+  return new Date().toISOString().slice(0, 10);
+}
+const exportFrom   = ref(todayLocal());
+const exportTo     = ref(todayLocal());
+const exportSource = ref<'both' | 'ultrasonic' | 'camera'>('both');
 
 function csvCell(v: string | number | null | undefined) {
   if (v === null || v === undefined) return "";
@@ -156,14 +164,29 @@ async function exportCsv() {
   const labelById = Object.fromEntries(slots.value.map((s) => [s.id, s.label]));
   const slotLabels = slots.value.map((s) => s.label).sort();
 
-  const { data } = await client
-    .from("slot_events")
-    .select("slot_id, new_state, source, occurred_at")
-    .in("slot_id", slotIds)
-    .order("occurred_at", { ascending: true });
+  // Paginate through all matching events in 1 000-row pages
+  const PAGE = 1000;
+  const allRows: any[] = [];
+  let from = 0;
+  while (true) {
+    let q = client
+      .from("slot_events")
+      .select("slot_id, new_state, source, occurred_at")
+      .in("slot_id", slotIds)
+      .order("occurred_at", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (exportFrom.value)              q = q.gte("occurred_at", `${exportFrom.value}T00:00:00`);
+    if (exportTo.value)                q = q.lte("occurred_at", `${exportTo.value}T23:59:59`);
+    if (exportSource.value !== 'both') q = q.eq("source", exportSource.value);
+    const { data, error } = await q;
+    if (error || !data?.length) break;
+    allRows.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
 
   const lotName = lot.value?.name ?? lotId;
-  const events = data ?? [];
+  const events = allRows;
 
   function buildPivot(source: string) {
     const filtered = events.filter((e) => e.source === source);
@@ -197,13 +220,17 @@ async function exportCsv() {
     return rows;
   }
 
-  const ultrasonicRows = buildPivot("ultrasonic");
-  const cameraRows     = buildPivot("camera");
-
-  if (ultrasonicRows) downloadCsv(ultrasonicRows, `ultrasonic_${lotName}.csv`);
-  if (cameraRows)     downloadCsv(cameraRows,     `camera_${lotName}.csv`);
+  if (exportSource.value !== 'camera') {
+    const rows = buildPivot("ultrasonic");
+    if (rows) downloadCsv(rows, `ultrasonic_${lotName}.csv`);
+  }
+  if (exportSource.value !== 'ultrasonic') {
+    const rows = buildPivot("camera");
+    if (rows) downloadCsv(rows, `camera_${lotName}.csv`);
+  }
 
   exportLoading.value = false;
+  showExportDialog.value = false;
 }
 
 // ── State badge ───────────────────────────────────────────────────────────────
@@ -235,8 +262,8 @@ const stateVariant: Record<
         <Button
           size="sm"
           variant="outline"
-          :disabled="exportLoading || !slots.length"
-          @click="exportCsv"
+          :disabled="!slots.length"
+          @click="showExportDialog = true"
         >
           <Download class="mr-2 size-4" />
           Export
@@ -471,6 +498,69 @@ const stateVariant: Record<
       </div>
     </template>
   </div>
+
+  <!-- Export dialog -->
+  <Dialog v-model:open="showExportDialog">
+    <DialogContent class="sm:max-w-sm">
+      <DialogHeader>
+        <DialogTitle>Export slot events</DialogTitle>
+        <DialogDescription>
+          Download occupancy history as CSV files, one per source (ultrasonic / camera).
+        </DialogDescription>
+      </DialogHeader>
+
+      <div class="space-y-4 py-2">
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide">From</label>
+          <input
+            v-model="exportFrom"
+            type="date"
+            :max="exportTo || todayLocal()"
+            class="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+          />
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide">To</label>
+          <input
+            v-model="exportTo"
+            type="date"
+            :min="exportFrom"
+            :max="todayLocal()"
+            class="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+          />
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Source</label>
+          <div class="flex gap-2">
+            <button
+              v-for="opt in [{ value: 'both', label: 'Both' }, { value: 'ultrasonic', label: 'Ultrasonic' }, { value: 'camera', label: 'Camera' }]"
+              :key="opt.value"
+              class="flex-1 h-9 rounded-md border text-sm font-medium transition-colors"
+              :class="exportSource === opt.value
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-background text-muted-foreground border-input hover:bg-muted'"
+              @click="exportSource = opt.value as typeof exportSource"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+        </div>
+        <p class="text-xs text-muted-foreground">
+          All events between 00:00 on the start date and 23:59 on the end date will be exported.
+        </p>
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" :disabled="exportLoading" @click="showExportDialog = false">
+          Cancel
+        </Button>
+        <Button :disabled="exportLoading || !exportFrom || !exportTo" @click="exportCsv">
+          <Download class="mr-2 size-4" />
+          {{ exportLoading ? 'Exporting…' : 'Download CSV' }}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 
   <AddZoneDialog v-model:open="showAddZone" :lot-id="lotId" @created="load" />
 

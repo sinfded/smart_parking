@@ -1,6 +1,9 @@
 export default defineNuxtConfig({
   compatibilityDate: "2025-07-15",
   devtools: { enabled: true },
+  build: {
+    transpile: ["lucide-vue-next"],
+  },
   modules: [
     "@nuxtjs/tailwindcss",
     "shadcn-nuxt",

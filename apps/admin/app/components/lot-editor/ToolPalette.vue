@@ -4,6 +4,7 @@ import {
   MousePointer2,
   Square,
   Minus,
+  PenLine,
   LogIn,
   LogOut,
   Camera,
@@ -48,10 +49,11 @@ interface ToolDef {
 }
 
 const tools: ToolDef[] = [
-  { tool: "select", icon: MousePointer2, label: "Select", shortcut: "S" },
-  { tool: "slot", icon: Square, label: "Slot", shortcut: "P" },
-  { tool: "road", icon: Minus, label: "Road", shortcut: "R" },
-  { tool: "entrance", icon: LogIn, label: "Entrance", shortcut: "E" },
+  { tool: "select",   icon: MousePointer2, label: "Select",   shortcut: "S" },
+  { tool: "slot",     icon: Square,        label: "Slot",     shortcut: "P" },
+  { tool: "road",     icon: Minus,         label: "Road",     shortcut: "R" },
+  { tool: "boundary", icon: PenLine,       label: "Boundary", shortcut: "B" },
+  { tool: "entrance", icon: LogIn,         label: "Entrance", shortcut: "E" },
   { tool: "exit", icon: LogOut, label: "Exit", shortcut: "X" },
   { tool: "camera", icon: Camera, label: "Camera", shortcut: "C" },
   { tool: "sensor", icon: Radio, label: "Sensor", shortcut: "U" },
@@ -61,15 +63,13 @@ const tools: ToolDef[] = [
 </script>
 
 <template>
-  <div
-    class="w-14 shrink-0 flex flex-col gap-1 py-2 px-1 border-r bg-background"
-  >
+  <div class="h-11 shrink-0 flex flex-row items-center gap-0.5 px-2 border-b bg-background">
     <!-- Drawing tools -->
-    <div class="flex flex-col gap-0.5">
+    <div class="flex flex-row gap-0.5">
       <button
         v-for="t in tools"
         :key="t.tool"
-        class="group relative flex flex-col items-center justify-center h-11 w-full rounded-md transition-colors"
+        class="relative flex flex-col items-center justify-center h-8 w-8 rounded-md transition-colors"
         :class="
           activeTool === t.tool
             ? 'bg-primary text-primary-foreground'
@@ -79,15 +79,14 @@ const tools: ToolDef[] = [
         @click="emit('setTool', t.tool)"
       >
         <component :is="t.icon" class="size-4" />
-        <span class="text-[9px] mt-0.5 leading-none">{{ t.shortcut }}</span>
       </button>
     </div>
 
-    <Separator class="my-1" />
+    <Separator orientation="vertical" class="mx-1 h-6" />
 
     <!-- History -->
     <button
-      class="flex items-center justify-center h-10 w-full rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+      class="flex items-center justify-center h-8 w-8 rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
       :disabled="!canUndo"
       title="Undo (Ctrl+Z)"
       @click="emit('undo')"
@@ -95,7 +94,7 @@ const tools: ToolDef[] = [
       <Undo2 class="size-4" />
     </button>
     <button
-      class="flex items-center justify-center h-10 w-full rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+      class="flex items-center justify-center h-8 w-8 rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
       :disabled="!canRedo"
       title="Redo (Ctrl+Y)"
       @click="emit('redo')"
@@ -103,11 +102,11 @@ const tools: ToolDef[] = [
       <Redo2 class="size-4" />
     </button>
 
-    <Separator class="my-1" />
+    <Separator orientation="vertical" class="mx-1 h-6" />
 
     <!-- View -->
     <button
-      class="flex items-center justify-center h-10 w-full rounded-md transition-colors"
+      class="flex items-center justify-center h-8 w-8 rounded-md transition-colors"
       :class="
         gridVisible
           ? 'bg-muted text-foreground'
@@ -119,7 +118,7 @@ const tools: ToolDef[] = [
       <Grid3x3 class="size-4" />
     </button>
     <button
-      class="flex items-center justify-center h-10 w-full rounded-md transition-colors"
+      class="flex items-center justify-center h-8 w-8 rounded-md transition-colors"
       :class="
         snapEnabled
           ? 'bg-muted text-foreground'
@@ -131,32 +130,32 @@ const tools: ToolDef[] = [
       <Magnet class="size-4" />
     </button>
     <button
-      class="flex items-center justify-center h-10 w-full rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
+      class="flex items-center justify-center h-8 w-8 rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
       title="Fit to view (0)"
       @click="emit('fitToView')"
     >
       <Maximize2 class="size-4" />
     </button>
 
-    <Separator class="my-1" />
+    <Separator orientation="vertical" class="mx-1 h-6" />
 
     <!-- IO -->
     <button
-      class="flex items-center justify-center h-10 w-full rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
+      class="flex items-center justify-center h-8 w-8 rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
       title="Upload background image"
       @click="emit('uploadBg')"
     >
       <ImageIcon class="size-4" />
     </button>
     <button
-      class="flex items-center justify-center h-10 w-full rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
+      class="flex items-center justify-center h-8 w-8 rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
       title="Export layout JSON"
       @click="emit('exportJSON')"
     >
       <Download class="size-4" />
     </button>
     <button
-      class="flex items-center justify-center h-10 w-full rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
+      class="flex items-center justify-center h-8 w-8 rounded-md transition-colors hover:bg-muted text-muted-foreground hover:text-foreground"
       title="Import layout JSON"
       @click="emit('importJSON')"
     >

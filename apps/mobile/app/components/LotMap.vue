@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import type { LotMapConfig, LiveSlot, ParkingSlotEl, SlotStatus } from '@smart-parking/types';
-import { STATUS_COLORS, SLOT_COLORS } from '@smart-parking/types';
-import { useEventListener } from '@vueuse/core';
+import type {
+  LotMapConfig,
+  ParkingSlotEl,
+  SlotStatus,
+} from "@smart-parking/types";
+import { STATUS_COLORS, SLOT_COLORS } from "@smart-parking/types";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 const props = defineProps<{
-  config:     LotMapConfig;
-  liveSlots:  Map<string, SlotStatus>; // slotId → current status
-  highlightId?: string | null;         // nearest available slot
+  config: LotMapConfig;
+  liveSlots: Map<string, SlotStatus>;
+  highlightId?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -20,57 +23,91 @@ const emit = defineEmits<{
 const cw = computed(() => props.config.canvas.width);
 const ch = computed(() => props.config.canvas.height);
 
-const parkingSlots = computed(() =>
-  props.config.elements.filter((e): e is ParkingSlotEl => e.type === 'parking_slot' && e.visible)
+const boundaries = computed(() =>
+  props.config.elements.filter((e) => e.type === "boundary" && e.visible),
 );
+
+const parkingSlots = computed(() =>
+  props.config.elements.filter(
+    (e): e is ParkingSlotEl => e.type === "parking_slot" && e.visible,
+  ),
+);
+
 const roads = computed(() =>
-  props.config.elements.filter((e) => e.type === 'road' && e.visible)
+  props.config.elements.filter((e) => e.type === "road" && e.visible),
 );
 const entrances = computed(() =>
-  props.config.elements.filter((e) => e.type === 'entrance' && e.visible)
+  props.config.elements.filter((e) => e.type === "entrance" && e.visible),
 );
 const exits = computed(() =>
-  props.config.elements.filter((e) => e.type === 'exit' && e.visible)
+  props.config.elements.filter((e) => e.type === "exit" && e.visible),
 );
 const labels = computed(() =>
-  props.config.elements.filter((e) => e.type === 'label' && e.visible)
+  props.config.elements.filter((e) => e.type === "label" && e.visible),
 );
 
+// ── Slot state helpers ────────────────────────────────────────────────────────
+
 function slotStatus(slot: ParkingSlotEl): SlotStatus {
-  return slot.slotId ? (props.liveSlots.get(slot.slotId) ?? 'unknown') : 'unknown';
+  return slot.slotId
+    ? (props.liveSlots.get(slot.slotId) ?? "unknown")
+    : "unknown";
 }
 
-function slotFill(slot: ParkingSlotEl): string {
-  const status = slotStatus(slot);
-  if (status !== 'unknown' || !slot.slotId) return STATUS_COLORS[status];
-  return SLOT_COLORS[slot.category] ?? '#6366f1';
+const STATUS_OPACITY: Record<SlotStatus, number> = {
+  free: 0.32,
+  occupied: 0.42,
+  reserved: 0.38,
+  disabled: 0.12,
+  unknown: 0.18,
+};
+
+function slotOverlayOpacity(slot: ParkingSlotEl): number {
+  return STATUS_OPACITY[slotStatus(slot)];
+}
+
+function slotStatusColor(slot: ParkingSlotEl): string {
+  return STATUS_COLORS[slotStatus(slot)];
+}
+
+function slotCategoryColor(slot: ParkingSlotEl): string {
+  return SLOT_COLORS[slot.category] ?? "#6366f1";
 }
 
 function isHighlighted(slot: ParkingSlotEl): boolean {
   return !!props.highlightId && slot.id === props.highlightId;
 }
 
+// ── Tapped slot (local selection feedback) ────────────────────────────────────
+
+const tappedId = ref<string | null>(null);
+
+function onSlotTap(slot: ParkingSlotEl) {
+  tappedId.value = tappedId.value === slot.id ? null : slot.id;
+  emit("tapSlot", slot);
+}
+
 // ── Touch zoom / pan ──────────────────────────────────────────────────────────
 
-const wrapperRef = useTemplateRef<HTMLDivElement>('wrapper');
-const svgRef     = useTemplateRef<SVGSVGElement>('svg');
+const wrapperRef = useTemplateRef<HTMLDivElement>("wrapper");
 
-const scale     = ref(1);
-const panX      = ref(0);
-const panY      = ref(0);
-const minScale  = 0.3;
-const maxScale  = 8;
+const scale = ref(1);
+const panX = ref(0);
+const panY = ref(0);
+const minScale = 0.05;
+const maxScale = 8;
 
-// Pointer tracking
 let pointers = new Map<number, { x: number; y: number }>();
-let lastDist  = 0;
-let lastMidX  = 0;
-let lastMidY  = 0;
-let isPanning  = false;
+let lastDist = 0;
+let lastMidX = 0;
+let lastMidY = 0;
+let isPanning = false;
 
-function clampScale(s: number) { return Math.max(minScale, Math.min(maxScale, s)); }
+function clampScale(s: number) {
+  return Math.max(minScale, Math.min(maxScale, s));
+}
 
-function dist(a: { x: number; y: number }, b: { x: number; y: number }) {
+function ptDist(a: { x: number; y: number }, b: { x: number; y: number }) {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
@@ -78,10 +115,12 @@ function onPointerDown(e: PointerEvent) {
   e.preventDefault();
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   wrapperRef.value?.setPointerCapture(e.pointerId);
-
   if (pointers.size === 2) {
-    const [a, b] = [...pointers.values()];
-    lastDist = dist(a, b);
+    const [a, b] = [...pointers.values()] as [
+      { x: number; y: number },
+      { x: number; y: number },
+    ];
+    lastDist = ptDist(a, b);
     lastMidX = (a.x + b.x) / 2;
     lastMidY = (a.y + b.y) / 2;
     isPanning = false;
@@ -92,39 +131,33 @@ function onPointerDown(e: PointerEvent) {
 
 function onPointerMove(e: PointerEvent) {
   if (!pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId)!;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
   if (pointers.size === 2) {
-    const [a, b] = [...pointers.values()];
-    const d     = dist(a, b);
-    const midX  = (a.x + b.x) / 2;
-    const midY  = (a.y + b.y) / 2;
-    const rect  = wrapperRef.value!.getBoundingClientRect();
-
+    const [a, b] = [...pointers.values()] as [
+      { x: number; y: number },
+      { x: number; y: number },
+    ];
+    const d = ptDist(a, b);
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    const rect = wrapperRef.value!.getBoundingClientRect();
     const factor = d / (lastDist || d);
-    const newScale = clampScale(scale.value * factor);
-
-    // Zoom toward the pinch midpoint
+    const newSc = clampScale(scale.value * factor);
     const ox = midX - rect.left;
     const oy = midY - rect.top;
-    panX.value = ox - (ox - panX.value) * (newScale / scale.value);
-    panY.value = oy - (oy - panY.value) * (newScale / scale.value);
-    scale.value = newScale;
-
-    // Pan
-    panX.value += midX - lastMidX;
-    panY.value += midY - lastMidY;
-
+    panX.value =
+      ox - (ox - panX.value) * (newSc / scale.value) + (midX - lastMidX);
+    panY.value =
+      oy - (oy - panY.value) * (newSc / scale.value) + (midY - lastMidY);
+    scale.value = newSc;
     lastDist = d;
     lastMidX = midX;
     lastMidY = midY;
   } else if (pointers.size === 1 && isPanning) {
-    // Single-finger pan
-    const prev = pointers.get(e.pointerId)!;
     panX.value += e.clientX - prev.x;
     panY.value += e.clientY - prev.y;
-    // Update after using prev
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   }
 }
 
@@ -133,88 +166,177 @@ function onPointerUp(e: PointerEvent) {
   if (pointers.size < 2) isPanning = pointers.size === 1;
 }
 
-// Wheel zoom for desktop
 function onWheel(e: WheelEvent) {
   e.preventDefault();
-  const rect    = wrapperRef.value!.getBoundingClientRect();
-  const by      = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-  const newSc   = clampScale(scale.value * by);
-  const ox      = e.clientX - rect.left;
-  const oy      = e.clientY - rect.top;
-  panX.value    = ox - (ox - panX.value) * (newSc / scale.value);
-  panY.value    = oy - (oy - panY.value) * (newSc / scale.value);
-  scale.value   = newSc;
+  const rect = wrapperRef.value!.getBoundingClientRect();
+  const by = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const newSc = clampScale(scale.value * by);
+  const ox = e.clientX - rect.left;
+  const oy = e.clientY - rect.top;
+  panX.value = ox - (ox - panX.value) * (newSc / scale.value);
+  panY.value = oy - (oy - panY.value) * (newSc / scale.value);
+  scale.value = newSc;
+}
+
+function fitToContent() {
+  const el = wrapperRef.value;
+  if (!el) return;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let hasBounds = false;
+
+  // Prefer boundary bounding box
+  const bList = boundaries.value;
+  if (bList.length) {
+    for (const b of bList) {
+      const pts = (b as any).points as number[];
+      for (let i = 0; i + 1 < pts.length; i += 2) {
+        minX = Math.min(minX, pts[i]!);
+        minY = Math.min(minY, pts[i + 1]!);
+        maxX = Math.max(maxX, pts[i]!);
+        maxY = Math.max(maxY, pts[i + 1]!);
+      }
+    }
+    hasBounds = true;
+  } else if (parkingSlots.value.length) {
+    for (const s of parkingSlots.value) {
+      minX = Math.min(minX, s.x);
+      minY = Math.min(minY, s.y);
+      maxX = Math.max(maxX, s.x + s.width);
+      maxY = Math.max(maxY, s.y + s.height);
+    }
+    hasBounds = true;
+  }
+
+  if (!hasBounds) {
+    minX = 0; minY = 0; maxX = cw.value; maxY = ch.value;
+  }
+
+  const pad = hasBounds
+    ? Math.min((maxX - minX) * 0.05, (maxY - minY) * 0.05, 150)
+    : 0;
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+
+  const bboxW = maxX - minX;
+  const bboxH = maxY - minY;
+  const rect = el.getBoundingClientRect();
+  const newScale = clampScale(Math.min(rect.width / bboxW, rect.height / bboxH));
+  panX.value = (rect.width - bboxW * newScale) / 2 - minX * newScale;
+  panY.value = (rect.height - bboxH * newScale) / 2 - minY * newScale;
+  scale.value = newScale;
 }
 
 function resetView() {
-  scale.value = 1;
-  panX.value  = 0;
-  panY.value  = 0;
+  fitToContent();
 }
 
-// Mount touch/wheel listeners (non-passive to allow preventDefault)
+let fittedOnce = false;
+
 onMounted(() => {
   const el = wrapperRef.value;
   if (!el) return;
-  el.addEventListener('pointerdown', onPointerDown, { passive: false });
-  el.addEventListener('pointermove', onPointerMove, { passive: false });
-  el.addEventListener('pointerup',   onPointerUp,   { passive: false });
-  el.addEventListener('wheel',       onWheel,       { passive: false });
+  el.addEventListener("pointerdown", onPointerDown, { passive: false });
+  el.addEventListener("pointermove", onPointerMove, { passive: false });
+  el.addEventListener("pointerup", onPointerUp, { passive: false });
+  el.addEventListener("wheel", onWheel, { passive: false });
   onUnmounted(() => {
-    el.removeEventListener('pointerdown', onPointerDown);
-    el.removeEventListener('pointermove', onPointerMove);
-    el.removeEventListener('pointerup',   onPointerUp);
-    el.removeEventListener('wheel',       onWheel);
+    el.removeEventListener("pointerdown", onPointerDown);
+    el.removeEventListener("pointermove", onPointerMove);
+    el.removeEventListener("pointerup", onPointerUp);
+    el.removeEventListener("wheel", onWheel);
+  });
+
+  // Fit immediately if slots are already available, otherwise wait for first load
+  nextTick(() => {
+    if (parkingSlots.value.length) {
+      fitToContent();
+      fittedOnce = true;
+    }
   });
 });
 
-// ── Slot tap ──────────────────────────────────────────────────────────────────
+watch([parkingSlots, boundaries], () => {
+  if (!fittedOnce && (parkingSlots.value.length || boundaries.value.length)) {
+    nextTick(fitToContent);
+    fittedOnce = true;
+  }
+});
 
-function onSlotTap(slot: ParkingSlotEl) {
-  emit('tapSlot', slot);
-}
-
-// ── Road polyline string ──────────────────────────────────────────────────────
+// ── Road polyline ─────────────────────────────────────────────────────────────
 
 function roadPolyline(points: number[]): string {
   const pairs: string[] = [];
-  for (let i = 0; i < points.length - 1; i += 2) {
+  for (let i = 0; i + 1 < points.length; i += 2) {
     pairs.push(`${points[i]},${points[i + 1]}`);
   }
-  return pairs.join(' ');
+  return pairs.join(" ");
 }
 
 // ── Canvas transform ──────────────────────────────────────────────────────────
 
 const transform = computed(
-  () => `translate(${panX.value}px, ${panY.value}px) scale(${scale.value})`
+  () => `translate(${panX.value}px, ${panY.value}px) scale(${scale.value})`,
 );
 </script>
 
 <template>
-  <div class="relative w-full overflow-hidden rounded-xl border border-border bg-muted/30 select-none"
-    style="aspect-ratio: unset; min-height: 220px; height: 100%">
-
-    <!-- Touch/scroll container -->
+  <div
+    class="relative w-full overflow-hidden rounded-xl border border-border select-none"
+    style="min-height: 220px"
+  >
+    <!-- Touch / scroll container -->
     <div
       ref="wrapper"
       class="absolute inset-0 touch-none overflow-hidden"
-      style="cursor: grab"
+      style="cursor: grab; background: #111827"
     >
       <!-- Transformed SVG -->
-      <div :style="{ transform, transformOrigin: '0 0', willChange: 'transform', position: 'absolute', inset: 0 }">
+      <div
+        :style="{
+          transform,
+          transformOrigin: '0 0',
+          willChange: 'transform',
+          position: 'absolute',
+          inset: 0,
+        }"
+      >
         <svg
-          ref="svg"
           :viewBox="`0 0 ${cw} ${ch}`"
           :width="cw"
           :height="ch"
           class="block"
           style="max-width: none"
         >
-          <!-- Background -->
-          <rect :width="cw" :height="ch" fill="#f9fafb" />
+          <defs>
+            <!-- Asphalt grain pattern -->
+            <pattern
+              id="asphalt-bg"
+              :width="config.grid.size"
+              :height="config.grid.size"
+              patternUnits="userSpaceOnUse"
+            >
+              <rect
+                :width="config.grid.size"
+                :height="config.grid.size"
+                fill="#1f2937"
+              />
+              <line :x2="config.grid.size" stroke="#243044" stroke-width="1" />
+              <line :y2="config.grid.size" stroke="#243044" stroke-width="1" />
+            </pattern>
+            <!-- Slot glow filter -->
+            <filter id="slot-glow" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="40" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
 
-          <!-- Background image if configured -->
+          <!-- ── Dark asphalt background ───────────────────────────────── -->
+          <rect :width="cw" :height="ch" fill="url(#asphalt-bg)" />
+
+          <!-- Background image overlay -->
           <image
             v-if="config.background.url"
             :href="config.background.url"
@@ -225,142 +347,303 @@ const transform = computed(
             :opacity="config.background.opacity"
           />
 
-          <!-- Grid -->
-          <template v-if="config.grid.visible">
-            <defs>
-              <pattern
-                id="lot-map-grid"
-                :width="config.grid.size"
-                :height="config.grid.size"
-                patternUnits="userSpaceOnUse"
-              >
-                <path
-                  :d="`M ${config.grid.size} 0 L 0 0 0 ${config.grid.size}`"
-                  fill="none"
-                  stroke="#e5e7eb"
-                  stroke-width="0.5"
-                />
-              </pattern>
-            </defs>
-            <rect :width="cw" :height="ch" fill="url(#lot-map-grid)" />
-          </template>
+          <!-- ── Property boundaries ──────────────────────────────────── -->
+          <g v-for="b in boundaries" :key="b.id">
+            <polygon
+              :points="(b as any).points.reduce((acc: string, v: number, i: number) =>
+                i % 2 === 0 ? acc + (acc ? ' ' : '') + v : acc + ',' + v, '')"
+              :fill="`rgba(249,115,22,${(b as any).fillOpacity})`"
+              :stroke="(b as any).strokeColor"
+              :stroke-width="(b as any).strokeWidth"
+              stroke-dasharray="60 30"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </g>
 
-          <!-- Roads -->
+          <!-- ── Roads ─────────────────────────────────────────────────── -->
           <g v-for="road in roads" :key="road.id">
-            <!-- Curb border -->
+            <!-- Curb edge -->
             <polyline
               :points="roadPolyline((road as any).points)"
-              stroke="#6b7280"
-              :stroke-width="(road as any).strokeWidth * 1.14"
-              stroke-linecap="round" stroke-linejoin="round" fill="none"
+              :stroke="
+                (road as any).color === '#374151' ? '#374151' : '#4b5563'
+              "
+              :stroke-width="(road as any).strokeWidth * 1.2"
+              stroke-linecap="butt"
+              stroke-linejoin="miter"
+              fill="none"
             />
-            <!-- Asphalt -->
+            <!-- Asphalt surface -->
             <polyline
               :points="roadPolyline((road as any).points)"
               :stroke="(road as any).color || '#374151'"
               :stroke-width="(road as any).strokeWidth"
-              stroke-linecap="round" stroke-linejoin="round" fill="none"
+              stroke-linecap="butt"
+              stroke-linejoin="miter"
+              fill="none"
             />
-            <!-- Center lane marking -->
+            <!-- Lane marking -->
             <polyline
               :points="roadPolyline((road as any).points)"
-              :stroke="(road as any).direction === 'one-way' ? 'rgba(255,255,255,0.7)' : '#fbbf24'"
-              :stroke-width="(road as any).strokeWidth * 0.08"
-              :stroke-dasharray="(road as any).direction === 'one-way' ? undefined : `${(road as any).strokeWidth * 0.7} ${(road as any).strokeWidth * 0.45}`"
-              stroke-linecap="round" stroke-linejoin="round" fill="none"
+              :stroke="
+                (road as any).direction === 'one-way'
+                  ? 'rgba(255,255,255,0.55)'
+                  : '#fbbf24'
+              "
+              :stroke-width="(road as any).strokeWidth * 0.07"
+              :stroke-dasharray="
+                (road as any).direction === 'one-way'
+                  ? undefined
+                  : `${(road as any).strokeWidth * 0.6} ${(road as any).strokeWidth * 0.4}`
+              "
+              stroke-linecap="butt"
+              stroke-linejoin="miter"
+              fill="none"
             />
           </g>
 
-          <!-- Parking slots -->
+          <!-- ── Parking slots ──────────────────────────────────────────── -->
           <g
             v-for="slot in parkingSlots"
             :key="slot.id"
-            :transform="`translate(${slot.x},${slot.y}) rotate(${slot.rotation} ${slot.width / 2} ${slot.height / 2})`"
+            :transform="`translate(${slot.x},${slot.y}) rotate(${slot.rotation})`"
             style="cursor: pointer"
             @click="onSlotTap(slot)"
           >
-            <!-- Highlight ring for nearest slot -->
+            <!-- Nearest-slot pulsing glow ring (behind everything) -->
             <rect
               v-if="isHighlighted(slot)"
-              :x="-12" :y="-12"
-              :width="slot.width + 24"
-              :height="slot.height + 24"
-              rx="10"
+              :x="-20"
+              :y="-20"
+              :width="slot.width + 40"
+              :height="slot.height + 40"
+              rx="14"
               fill="none"
               stroke="#facc15"
-              stroke-width="16"
-              opacity="0.8"
+              stroke-width="24"
+              class="slot-highlight-glow"
             />
+
+            <!-- Asphalt base -->
             <rect
               :width="slot.width"
               :height="slot.height"
-              rx="6"
-              :fill="slotFill(slot)"
-              :stroke="isHighlighted(slot) ? '#facc15' : 'rgba(0,0,0,0.12)'"
-              :stroke-width="isHighlighted(slot) ? 8 : 2"
+              fill="#111827"
+              stroke="#0d1017"
+              stroke-width="2"
             />
+
+            <!-- Status color overlay -->
+            <rect
+              :width="slot.width"
+              :height="slot.height"
+              :fill="slotStatusColor(slot)"
+              :opacity="slotOverlayOpacity(slot)"
+            />
+
+            <!-- Left painted boundary line -->
+            <line
+              x1="5"
+              y1="0"
+              x2="5"
+              :y2="slot.height"
+              stroke="rgba(255,255,255,0.75)"
+              stroke-width="5"
+            />
+            <!-- Right painted boundary line -->
+            <line
+              :x1="slot.width - 5"
+              y1="0"
+              :x2="slot.width - 5"
+              :y2="slot.height"
+              stroke="rgba(255,255,255,0.75)"
+              stroke-width="5"
+            />
+
+            <!-- Category color stripe at head of stall -->
+            <rect
+              x="5"
+              y="0"
+              :width="slot.width - 10"
+              :height="Math.max(8, Math.round(slot.height * 0.07))"
+              :fill="slotCategoryColor(slot)"
+            />
+
+            <!-- Slot code — floor lettering -->
             <text
               :x="slot.width / 2"
-              :y="slot.height / 2 + slot.height * 0.06"
+              :y="slot.height * 0.46"
               text-anchor="middle"
-              :font-size="Math.min(slot.width, slot.height) * 0.28"
+              dominant-baseline="middle"
+              :font-size="Math.min(slot.width, slot.height) * 0.27"
               font-family="ui-monospace, monospace"
               font-weight="700"
-              fill="white"
-            >{{ slot.code }}</text>
+              fill="rgba(255,255,255,0.92)"
+            >
+              {{ slot.code }}
+            </text>
+
+            <!-- Status indicator dot -->
+            <circle
+              :cx="slot.width / 2"
+              :cy="slot.height * 0.75"
+              :r="Math.min(slot.width, slot.height) * 0.08"
+              :fill="slotStatusColor(slot)"
+            />
+
+            <!-- Nearest-slot bright border -->
+            <rect
+              v-if="isHighlighted(slot)"
+              :width="slot.width"
+              :height="slot.height"
+              fill="none"
+              stroke="#facc15"
+              stroke-width="12"
+              class="slot-highlight-border"
+            />
+
+            <!-- Tapped / selected slot border -->
+            <rect
+              v-if="tappedId === slot.id"
+              :width="slot.width"
+              :height="slot.height"
+              fill="rgba(59,130,246,0.08)"
+              stroke="#3b82f6"
+              stroke-width="14"
+            />
           </g>
 
-          <!-- Entrances -->
+          <!-- ── Entrances ───────────────────────────────────────────────── -->
           <g
             v-for="el in entrances"
             :key="el.id"
             :transform="`translate(${(el as any).x},${(el as any).y}) rotate(${(el as any).rotation})`"
           >
-            <rect :width="(el as any).width" :height="(el as any).height" rx="6" fill="#16a34a" opacity="0.9" />
+            <rect
+              :width="(el as any).width"
+              :height="(el as any).height"
+              rx="8"
+              fill="#14532d"
+              stroke="#16a34a"
+              stroke-width="6"
+            />
+            <!-- Arrow chevron pointing down (enter) -->
+            <polyline
+              :points="`
+                ${(el as any).width * 0.3},${(el as any).height * 0.28}
+                ${(el as any).width * 0.5},${(el as any).height * 0.52}
+                ${(el as any).width * 0.7},${(el as any).height * 0.28}
+              `"
+              fill="none"
+              stroke="#4ade80"
+              stroke-width="28"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
             <text
-              :x="(el as any).width / 2" :y="(el as any).height * 0.5"
+              :x="(el as any).width / 2"
+              :y="(el as any).height * 0.82"
               text-anchor="middle"
-              :font-size="(el as any).height * 0.28"
+              dominant-baseline="middle"
+              :font-size="(el as any).height * 0.22"
               font-family="ui-sans-serif, sans-serif"
-              font-weight="700" fill="white"
-            >▼ IN</text>
+              font-weight="700"
+              fill="#4ade80"
+              letter-spacing="4"
+            >
+              IN
+            </text>
           </g>
 
-          <!-- Exits -->
+          <!-- ── Exits ──────────────────────────────────────────────────── -->
           <g
             v-for="el in exits"
             :key="el.id"
             :transform="`translate(${(el as any).x},${(el as any).y}) rotate(${(el as any).rotation})`"
           >
-            <rect :width="(el as any).width" :height="(el as any).height" rx="6" fill="#dc2626" opacity="0.9" />
+            <rect
+              :width="(el as any).width"
+              :height="(el as any).height"
+              rx="8"
+              fill="#450a0a"
+              stroke="#dc2626"
+              stroke-width="6"
+            />
+            <!-- Arrow chevron pointing up (exit) -->
+            <polyline
+              :points="`
+                ${(el as any).width * 0.3},${(el as any).height * 0.52}
+                ${(el as any).width * 0.5},${(el as any).height * 0.28}
+                ${(el as any).width * 0.7},${(el as any).height * 0.52}
+              `"
+              fill="none"
+              stroke="#f87171"
+              stroke-width="28"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
             <text
-              :x="(el as any).width / 2" :y="(el as any).height * 0.5"
+              :x="(el as any).width / 2"
+              :y="(el as any).height * 0.82"
               text-anchor="middle"
-              :font-size="(el as any).height * 0.28"
+              dominant-baseline="middle"
+              :font-size="(el as any).height * 0.22"
               font-family="ui-sans-serif, sans-serif"
-              font-weight="700" fill="white"
-            >▲ OUT</text>
+              font-weight="700"
+              fill="#f87171"
+              letter-spacing="4"
+            >
+              OUT
+            </text>
           </g>
 
-          <!-- Labels -->
+          <!-- ── Labels ─────────────────────────────────────────────────── -->
           <text
             v-for="el in labels"
             :key="el.id"
             :x="(el as any).x"
             :y="(el as any).y"
             :font-size="(el as any).fontSize"
-            :fill="(el as any).color"
+            fill="rgba(209,213,219,0.85)"
             :transform="`rotate(${(el as any).rotation} ${(el as any).x} ${(el as any).y})`"
             font-family="ui-sans-serif, sans-serif"
-          >{{ (el as any).text }}</text>
+            font-weight="600"
+          >
+            {{ (el as any).text }}
+          </text>
 
           <!-- Canvas border -->
-          <rect :width="cw" :height="ch" fill="none" stroke="#d1d5db" stroke-width="4" />
+          <rect
+            :width="cw"
+            :height="ch"
+            fill="none"
+            stroke="#374151"
+            stroke-width="6"
+          />
 
           <!-- Empty state -->
           <template v-if="!parkingSlots.length">
-            <text :x="cw / 2" :y="ch / 2 - 60" text-anchor="middle" font-size="200" fill="#9ca3af" font-family="ui-sans-serif, sans-serif">No layout configured.</text>
-            <text :x="cw / 2" :y="ch / 2 + 80" text-anchor="middle" font-size="140" fill="#d1d5db" font-family="ui-sans-serif, sans-serif">Use the admin dashboard to design this lot's layout.</text>
+            <text
+              :x="cw / 2"
+              :y="ch / 2 - 80"
+              text-anchor="middle"
+              font-size="200"
+              fill="#374151"
+              font-family="ui-sans-serif, sans-serif"
+            >
+              No layout yet
+            </text>
+            <text
+              :x="cw / 2"
+              :y="ch / 2 + 100"
+              text-anchor="middle"
+              font-size="130"
+              fill="#4b5563"
+              font-family="ui-sans-serif, sans-serif"
+            >
+              Design this lot in the admin dashboard
+            </text>
           </template>
         </svg>
       </div>
@@ -368,26 +651,71 @@ const transform = computed(
 
     <!-- Reset view button -->
     <button
-      class="absolute top-2 right-2 bg-background/80 backdrop-blur border rounded-lg px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+      class="absolute top-2 right-2 bg-zinc-800/90 backdrop-blur border border-zinc-700 rounded-lg px-3 py-1.5 text-[11px] text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors"
       @click="resetView"
     >
       Reset view
     </button>
 
     <!-- Legend -->
-    <div class="absolute bottom-2 left-2 flex flex-col gap-1 bg-background/80 backdrop-blur rounded-lg p-2 border">
-      <div class="flex items-center gap-1.5 text-[10px] text-foreground">
+    <div
+      class="absolute bottom-2 left-2 flex flex-col gap-1.5 bg-zinc-900/90 backdrop-blur rounded-xl p-2.5 border border-zinc-700/60"
+    >
+      <div
+        class="flex items-center gap-2 text-[10px] font-medium text-zinc-200"
+      >
         <span class="size-2.5 rounded-full bg-emerald-500 shrink-0" />Free
       </div>
-      <div class="flex items-center gap-1.5 text-[10px] text-foreground">
+      <div
+        class="flex items-center gap-2 text-[10px] font-medium text-zinc-200"
+      >
         <span class="size-2.5 rounded-full bg-red-500 shrink-0" />Occupied
       </div>
-      <div class="flex items-center gap-1.5 text-[10px] text-foreground">
+      <div
+        class="flex items-center gap-2 text-[10px] font-medium text-zinc-200"
+      >
         <span class="size-2.5 rounded-full bg-blue-500 shrink-0" />Reserved
       </div>
-      <div v-if="highlightId" class="flex items-center gap-1.5 text-[10px] text-yellow-500 font-medium">
+      <div
+        class="flex items-center gap-2 text-[10px] font-medium text-zinc-200"
+      >
+        <span class="size-2.5 rounded-full bg-amber-400 shrink-0" />Unknown
+      </div>
+      <div
+        v-if="highlightId"
+        class="flex items-center gap-2 text-[10px] font-semibold text-yellow-400 border-t border-zinc-700 pt-1.5 mt-0.5"
+      >
         <span class="size-2.5 rounded-full bg-yellow-400 shrink-0" />Nearest
+        free
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.slot-highlight-glow {
+  animation: highlight-pulse 1.6s ease-in-out infinite;
+}
+.slot-highlight-border {
+  animation: border-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes highlight-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+@keyframes border-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+</style>

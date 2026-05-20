@@ -1,6 +1,9 @@
 export default defineNuxtConfig({
   compatibilityDate: "2025-07-15",
   devtools: { enabled: true },
+  build: {
+    transpile: ["lucide-vue-next"],
+  },
   css: ["~/assets/tailwind.css"],
   modules: ["@nuxtjs/tailwindcss", "shadcn-nuxt", "@nuxtjs/supabase"],
   shadcn: {

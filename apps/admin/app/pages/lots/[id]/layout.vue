@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { ArrowLeft, Save, AlertCircle } from "lucide-vue-next";
-import type { LotElement, ParkingSlotEl, CameraEl } from "@smart-parking/types";
+import type {
+  LotElement,
+  ParkingSlotEl,
+  CameraEl,
+  BoundaryEl,
+} from "@smart-parking/types";
 import { CANVAS_SIZE, SLOT_COLORS } from "@smart-parking/types";
 import { useLotEditor } from "~/composables/useLotEditor";
 
@@ -16,6 +21,7 @@ const {
   elements,
   slots,
   roads,
+  boundaries,
   markers,
   activeTool,
   selectedIds,
@@ -39,6 +45,7 @@ const {
   newCamera,
   newSensor,
   newRoad,
+  newBoundary,
   newLabel,
   updateBackground,
   updateGrid,
@@ -198,9 +205,19 @@ const gridLines = computed(() => {
   const sw = 1 / (zoom.value || 1);
   const lines: any[] = [];
   for (let x = 0; x <= cw; x += g)
-    lines.push({ points: [x, 0, x, ch], stroke: "#e5e7eb", strokeWidth: sw, listening: false });
+    lines.push({
+      points: [x, 0, x, ch],
+      stroke: "#e5e7eb",
+      strokeWidth: sw,
+      listening: false,
+    });
   for (let y = 0; y <= ch; y += g)
-    lines.push({ points: [0, y, cw, y], stroke: "#e5e7eb", strokeWidth: sw, listening: false });
+    lines.push({
+      points: [0, y, cw, y],
+      stroke: "#e5e7eb",
+      strokeWidth: sw,
+      listening: false,
+    });
   return lines;
 });
 
@@ -252,6 +269,13 @@ const isDrawingRoad = computed(
   () => roadPoints.value.length > 0 && activeTool.value === "road",
 );
 
+// Boundary draw state
+const boundaryPoints = ref<number[]>([]);
+const boundaryCursor = ref({ x: 0, y: 0 });
+const isDrawingBoundary = computed(
+  () => boundaryPoints.value.length > 0 && activeTool.value === "boundary",
+);
+
 // Rubber-band selection
 const selRect = ref<{ x1: number; y1: number; x2: number; y2: number } | null>(
   null,
@@ -264,9 +288,16 @@ const canvasCursor = computed(() => {
   if (activeTool.value === "delete") return "cell";
   if (activeTool.value === "select" && !isRubberBanding) return "default";
   if (
-    ["slot", "road", "entrance", "exit", "camera", "sensor", "label"].includes(
-      activeTool.value,
-    )
+    [
+      "slot",
+      "road",
+      "boundary",
+      "entrance",
+      "exit",
+      "camera",
+      "sensor",
+      "label",
+    ].includes(activeTool.value)
   )
     return "crosshair";
   return "default";
@@ -348,6 +379,11 @@ function onStageMouseMove(e: any) {
     roadCursor.value = sp;
     roadPoints.value = [...roadPoints.value.slice(0, -2), sp.x, sp.y];
   }
+
+  if (isDrawingBoundary.value && boundaryPoints.value.length >= 2) {
+    boundaryCursor.value = sp;
+    boundaryPoints.value = [...boundaryPoints.value.slice(0, -2), sp.x, sp.y];
+  }
 }
 
 function onStageMouseUp() {
@@ -374,14 +410,14 @@ function onStageMouseUp() {
 
 function onStageDblClick() {
   if (activeTool.value === "road") {
-    // A browser dblclick fires: click → click → dblclick.
-    // Both clicks added a point pair via onStageClick, so slice off the last 4
-    // values (the duplicate anchor pair added by the second click).
     const pts = roadPoints.value.slice(0, -4);
-    if (pts.length >= 4) {
-      addElement(newRoad(pts));
-    }
+    if (pts.length >= 4) addElement(newRoad(pts));
     roadPoints.value = [];
+  }
+  if (activeTool.value === "boundary") {
+    const pts = boundaryPoints.value.slice(0, -4);
+    if (pts.length >= 6) addElement(newBoundary(pts));
+    boundaryPoints.value = [];
   }
 }
 
@@ -395,7 +431,29 @@ function onStageClick(e: any) {
     if (!roadPoints.value.length) {
       roadPoints.value = [sp.x, sp.y, sp.x, sp.y];
     } else {
-      roadPoints.value = [...roadPoints.value.slice(0, -2), sp.x, sp.y, sp.x, sp.y];
+      roadPoints.value = [
+        ...roadPoints.value.slice(0, -2),
+        sp.x,
+        sp.y,
+        sp.x,
+        sp.y,
+      ];
+    }
+    return;
+  }
+
+  if (activeTool.value === "boundary") {
+    const sp = snapPos(getPos());
+    if (!boundaryPoints.value.length) {
+      boundaryPoints.value = [sp.x, sp.y, sp.x, sp.y];
+    } else {
+      boundaryPoints.value = [
+        ...boundaryPoints.value.slice(0, -2),
+        sp.x,
+        sp.y,
+        sp.x,
+        sp.y,
+      ];
     }
     return;
   }
@@ -412,7 +470,21 @@ function onElementDragMove(elId: string, e: any) {
 }
 
 function onElementDragEnd(elId: string, e: any) {
-  updateElement(elId, { x: e.target.x(), y: e.target.y() } as any);
+  const el = elements.value.find((el) => el.id === elId);
+  if (el && (el.type === "road" || el.type === "boundary")) {
+    const dx = e.target.x();
+    const dy = e.target.y();
+    if (dx === 0 && dy === 0) return;
+    const pts = (el as any).points as number[];
+    const newPts = pts.map((v: number, i: number) =>
+      i % 2 === 0 ? snapVal(v + dx) : snapVal(v + dy),
+    );
+    e.target.x(0);
+    e.target.y(0);
+    updateElement(elId, { points: newPts } as any);
+  } else {
+    updateElement(elId, { x: e.target.x(), y: e.target.y() } as any);
+  }
 }
 
 // ── Click on element ──────────────────────────────────────────────────────────
@@ -473,10 +545,16 @@ function handleKey(e: KeyboardEvent) {
       if (pts.length >= 4) addElement(newRoad(pts));
       roadPoints.value = [];
     }
+    if (e.key === "Enter" && activeTool.value === "boundary") {
+      const pts = boundaryPoints.value.slice(0, -2);
+      if (pts.length >= 6) addElement(newBoundary(pts));
+      boundaryPoints.value = [];
+    }
     if (e.key === "Escape") {
       clearSelection();
       setTool("select");
       roadPoints.value = [];
+      boundaryPoints.value = [];
     }
     if (e.key === "s") setTool("select");
     if (e.key === "p") setTool("slot");
@@ -485,6 +563,7 @@ function handleKey(e: KeyboardEvent) {
     if (e.key === "x") setTool("exit");
     if (e.key === "c") setTool("camera");
     if (e.key === "u") setTool("sensor");
+    if (e.key === "b") setTool("boundary");
     if (e.key === "l") setTool("label");
     if (e.key === "d") setTool("delete");
     if (e.key === "g") updateGrid({ visible: !layout.value.grid.visible });
@@ -599,16 +678,44 @@ const selRectConfig = computed(() => {
   };
 });
 
+// Boundary preview
+const boundaryPreviewConfig = computed(() => {
+  if (!isDrawingBoundary.value || boundaryPoints.value.length < 2) return null;
+  return {
+    points: boundaryPoints.value,
+    closed: true,
+    fill: "rgba(249,115,22,0.08)",
+    stroke: "#f97316",
+    strokeWidth: 2 / (zoom.value || 1),
+    dash: [40, 20],
+    lineCap: "round" as const,
+    lineJoin: "round" as const,
+    listening: false,
+    opacity: 0.85,
+  };
+});
+
 // Road preview — returns [curb, asphalt, center] configs
 const roadPreviewConfigs = computed(() => {
   if (!isDrawingRoad.value || roadPoints.value.length < 2) return null;
   const pts = roadPoints.value;
-  const sw  = layout.value.grid.size * 3;
-  const base = { points: pts, lineCap: 'round' as const, lineJoin: 'round' as const, listening: false, opacity: 0.7 };
+  const sw = layout.value.grid.size * 3;
+  const base = {
+    points: pts,
+    lineCap: "butt" as const,
+    lineJoin: "miter" as const,
+    listening: false,
+    opacity: 0.7,
+  };
   return [
-    { ...base, stroke: '#6b7280', strokeWidth: sw * 1.14 },
-    { ...base, stroke: '#374151', strokeWidth: sw, dash: [sw * 0.7, sw * 0.35] },
-    { ...base, stroke: '#fbbf24', strokeWidth: sw * 0.08 },
+    { ...base, stroke: "#6b7280", strokeWidth: sw * 1.14 },
+    {
+      ...base,
+      stroke: "#374151",
+      strokeWidth: sw,
+      dash: [sw * 0.7, sw * 0.35],
+    },
+    { ...base, stroke: "#fbbf24", strokeWidth: sw * 0.08 },
   ];
 });
 
@@ -622,40 +729,43 @@ const saveLabel = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col h-screen overflow-hidden space-y-6">
-    <!-- Top bar -->
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <Button variant="ghost" size="icon" class="size-7" as-child>
-          <NuxtLink to="/lots">
-            <ArrowLeft class="size-4" />
-          </NuxtLink>
-        </Button>
-        <Skeleton v-if="!lotName" class="h-6 w-36" />
-        <h2 v-else class="text-base font-semibold">{{ lotName }}</h2>
+  <div class="flex flex-col h-screen overflow-hidden">
+    <!-- Header -->
+    <div class="shrink-0 flex flex-col gap-4 pb-4 space-y-2">
+      <!-- Top bar -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <Button variant="ghost" size="icon" class="size-7" as-child>
+            <NuxtLink to="/lots">
+              <ArrowLeft class="size-4" />
+            </NuxtLink>
+          </Button>
+          <Skeleton v-if="!lotName" class="h-6 w-36" />
+          <h2 v-else class="text-base font-semibold">{{ lotName }}</h2>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <span
+            v-if="saveLabel"
+            class="text-xs text-muted-foreground flex items-center gap-1.5"
+          >
+            <AlertCircle
+              v-if="saveStatus === 'error'"
+              class="size-3 text-destructive"
+            />
+            {{ saveLabel }}
+          </span>
+          <Button size="sm" variant="outline" @click="save">
+            <Save class="mr-1.5 size-3.5" /> Save now
+          </Button>
+        </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <span
-          v-if="saveLabel"
-          class="text-xs text-muted-foreground flex items-center gap-1.5"
-        >
-          <AlertCircle
-            v-if="saveStatus === 'error'"
-            class="size-3 text-destructive"
-          />
-          {{ saveLabel }}
-        </span>
-        <Button size="sm" variant="outline" @click="save">
-          <Save class="mr-1.5 size-3.5" /> Save now
-        </Button>
-      </div>
+      <LotNav />
     </div>
 
-    <LotNav />
-
     <!-- Editor body -->
-    <div class="flex flex-1 overflow-hidden">
+    <div class="flex flex-col flex-1 min-h-0 overflow-hidden">
       <!-- Tool palette -->
       <LotEditorToolPalette
         :active-tool="activeTool"
@@ -674,454 +784,602 @@ const saveLabel = computed(() => {
         @upload-bg="bgFileRef?.click()"
       />
 
-      <!-- Canvas -->
-      <div
-        ref="container"
-        class="flex-1 overflow-hidden bg-zinc-100 dark:bg-zinc-900 relative"
-        :style="{ cursor: canvasCursor }"
-      >
-        <client-only>
-          <v-stage
-            ref="stage"
-            :config="{
-              width: stageW,
-              height: stageH,
-              draggable: activeTool === 'select' && !isRubberBanding,
-            }"
-            @wheel="onWheel"
-            @mousedown="onStageMouseDown"
-            @mousemove="onStageMouseMove"
-            @mouseup="onStageMouseUp"
-            @dblclick="onStageDblClick"
-            @click="onStageClick"
-          >
-            <!-- ── Background image ─────────────────────────────────────── -->
-            <v-layer :config="{ listening: false }">
-              <v-rect
-                :config="{
-                  name: 'bg',
-                  width: layout.canvas.width,
-                  height: layout.canvas.height,
-                  fill: '#ffffff',
-                  listening: false,
-                }"
-              />
-              <v-image
-                v-if="bgImageEl"
-                :config="{
-                  image: bgImageEl,
-                  x: layout.background.x,
-                  y: layout.background.y,
-                  width: layout.background.width,
-                  height: layout.background.height,
-                  opacity: layout.background.opacity,
-                  listening: false,
-                }"
-              />
-            </v-layer>
-
-            <!-- ── Grid ────────────────────────────────────────────────── -->
-            <v-layer :config="{ listening: false }">
-              <v-line v-for="(ln, i) in gridLines" :key="i" :config="ln" />
-              <!-- Canvas border -->
-              <v-rect
-                :config="{
-                  width: layout.canvas.width,
-                  height: layout.canvas.height,
-                  fill: 'transparent',
-                  stroke: '#d1d5db',
-                  strokeWidth: 2,
-                  listening: false,
-                }"
-              />
-            </v-layer>
-
-            <!-- ── Roads ───────────────────────────────────────────────── -->
-            <v-layer>
-              <v-group
-                v-for="road in roads"
-                :key="road.id"
-                :config="{
-                  id: road.id,
-                  opacity: road.visible ? 1 : 0.3,
-                  draggable: elementDraggable(road),
-                }"
-                @click="onElementClick(road.id, $event)"
-                @dragend="onElementDragEnd(road.id, $event)"
-              >
-                <!-- Curb / edge border -->
-                <v-line :config="{
-                  points: road.points,
-                  stroke: isSelected(road.id) ? '#93c5fd' : '#6b7280',
-                  strokeWidth: road.strokeWidth * 1.14,
-                  lineCap: 'round', lineJoin: 'round', listening: false,
-                }" />
-                <!-- Asphalt surface -->
-                <v-line :config="{
-                  points: road.points,
-                  stroke: isSelected(road.id) ? '#3b82f6' : (road.color || '#374151'),
-                  strokeWidth: road.strokeWidth,
-                  lineCap: 'round', lineJoin: 'round', listening: false,
-                }" />
-                <!-- Center lane marking -->
-                <v-line :config="{
-                  points: road.points,
-                  stroke: road.direction === 'one-way' ? 'rgba(255,255,255,0.7)' : '#fbbf24',
-                  strokeWidth: road.strokeWidth * 0.08,
-                  lineCap: 'round', lineJoin: 'round',
-                  dash: road.direction === 'one-way' ? undefined : [road.strokeWidth * 0.7, road.strokeWidth * 0.45],
-                  listening: false,
-                }" />
-              </v-group>
-            </v-layer>
-
-            <!-- ── Parking slots ────────────────────────────────────────── -->
-            <v-layer>
-              <v-group
-                v-for="slot in slots"
-                :key="slot.id"
-                :config="{
-                  id: slot.id,
-                  x: slot.x,
-                  y: slot.y,
-                  rotation: slot.rotation,
-                  draggable: elementDraggable(slot),
-                  opacity: slot.visible ? 1 : 0.3,
-                }"
-                @click="onElementClick(slot.id, $event)"
-                @dragmove="onElementDragMove(slot.id, $event)"
-                @dragend="onElementDragEnd(slot.id, $event)"
-              >
+      <div class="flex flex-1 min-h-0 overflow-hidden">
+        <!-- Canvas -->
+        <div
+          ref="container"
+          class="flex-1 overflow-hidden bg-zinc-100 dark:bg-zinc-900 relative"
+          :style="{ cursor: canvasCursor }"
+        >
+          <client-only>
+            <v-stage
+              ref="stage"
+              :config="{
+                width: stageW,
+                height: stageH,
+                draggable: activeTool === 'select' && !isRubberBanding,
+              }"
+              @wheel="onWheel"
+              @mousedown="onStageMouseDown"
+              @mousemove="onStageMouseMove"
+              @mouseup="onStageMouseUp"
+              @dblclick="onStageDblClick"
+              @click="onStageClick"
+            >
+              <!-- ── Background image ─────────────────────────────────────── -->
+              <v-layer :config="{ listening: false }">
                 <v-rect
                   :config="{
-                    width: slot.width,
-                    height: slot.height,
-                    fill: slotFill(slot),
-                    stroke: isSelected(slot.id)
-                      ? '#1d4ed8'
-                      : 'rgba(0,0,0,0.15)',
-                    strokeWidth: isSelected(slot.id) ? 3 : 1,
-                    cornerRadius: 6,
-                    shadowColor: isSelected(slot.id)
-                      ? '#2563eb'
-                      : 'transparent',
-                    shadowBlur: 10,
-                    shadowOpacity: 0.4,
-                  }"
-                />
-                <v-text
-                  :config="{
-                    text: slot.code,
-                    width: slot.width,
-                    height: slot.height,
-                    align: 'center',
-                    verticalAlign: 'middle',
-                    fontSize: Math.min(slot.width, slot.height) * 0.28,
-                    fontFamily: 'ui-monospace, monospace',
-                    fontStyle: 'bold',
+                    name: 'bg',
+                    width: layout.canvas.width,
+                    height: layout.canvas.height,
                     fill: '#ffffff',
                     listening: false,
                   }"
                 />
-                <!-- Category badge -->
-                <v-text
+                <v-image
+                  v-if="bgImageEl"
                   :config="{
-                    text: slot.category.toUpperCase(),
-                    y:
-                      slot.height - Math.min(slot.width, slot.height) * 0.2 - 4,
-                    width: slot.width,
-                    align: 'center',
-                    fontSize: Math.min(slot.width, slot.height) * 0.16,
-                    fontFamily: 'ui-sans-serif, sans-serif',
-                    fill: 'rgba(255,255,255,0.7)',
+                    image: bgImageEl,
+                    x: layout.background.x,
+                    y: layout.background.y,
+                    width: layout.background.width,
+                    height: layout.background.height,
+                    opacity: layout.background.opacity,
                     listening: false,
                   }"
                 />
-              </v-group>
-            </v-layer>
+              </v-layer>
 
-            <!-- ── Markers (entrance / exit / camera / sensor / label) ─── -->
-            <v-layer>
-              <template v-for="el in markers" :key="el.id">
-                <!-- Entrance -->
-                <v-group
-                  v-if="el.type === 'entrance'"
+              <!-- ── Grid ────────────────────────────────────────────────── -->
+              <v-layer :config="{ listening: false }">
+                <v-line v-for="(ln, i) in gridLines" :key="i" :config="ln" />
+                <!-- Canvas border -->
+                <v-rect
                   :config="{
-                    id: el.id,
-                    x: el.x,
-                    y: el.y,
-                    rotation: el.rotation,
-                    draggable: elementDraggable(el),
-                    opacity: el.visible ? 1 : 0.3,
+                    width: layout.canvas.width,
+                    height: layout.canvas.height,
+                    fill: 'transparent',
+                    stroke: '#d1d5db',
+                    strokeWidth: 2,
+                    listening: false,
                   }"
-                  @click="onElementClick(el.id, $event)"
-                  @dragmove="onElementDragMove(el.id, $event)"
-                  @dragend="onElementDragEnd(el.id, $event)"
-                >
-                  <v-rect
-                    :config="{
-                      width: el.width,
-                      height: el.height,
-                      fill: '#16a34a',
-                      cornerRadius: 6,
-                      stroke: isSelected(el.id) ? '#1d4ed8' : 'transparent',
-                      strokeWidth: 3,
-                    }"
-                  />
-                  <v-text
-                    :config="{
-                      text: '▼ IN',
-                      width: el.width,
-                      height: el.height * 0.55,
-                      align: 'center',
-                      verticalAlign: 'middle',
-                      fontSize: el.height * 0.28,
-                      fill: '#ffffff',
-                      fontStyle: 'bold',
-                      listening: false,
-                    }"
-                  />
-                  <v-text
-                    :config="{
-                      text: el.label,
-                      y: el.height * 0.55,
-                      width: el.width,
-                      height: el.height * 0.45,
-                      align: 'center',
-                      verticalAlign: 'middle',
-                      fontSize: el.height * 0.2,
-                      fill: 'rgba(255,255,255,0.85)',
-                      listening: false,
-                    }"
-                  />
-                </v-group>
+                />
+              </v-layer>
 
-                <!-- Exit -->
+              <!-- ── Property boundaries ────────────────────────────────── -->
+              <v-layer>
                 <v-group
-                  v-else-if="el.type === 'exit'"
+                  v-for="b in boundaries"
+                  :key="b.id"
                   :config="{
-                    id: el.id,
-                    x: el.x,
-                    y: el.y,
-                    rotation: el.rotation,
-                    draggable: elementDraggable(el),
-                    opacity: el.visible ? 1 : 0.3,
+                    id: b.id,
+                    opacity: b.visible ? 1 : 0.3,
+                    draggable: elementDraggable(b),
                   }"
-                  @click="onElementClick(el.id, $event)"
-                  @dragmove="onElementDragMove(el.id, $event)"
-                  @dragend="onElementDragEnd(el.id, $event)"
+                  @click="onElementClick(b.id, $event)"
+                  @dragend="onElementDragEnd(b.id, $event)"
                 >
-                  <v-rect
-                    :config="{
-                      width: el.width,
-                      height: el.height,
-                      fill: '#dc2626',
-                      cornerRadius: 6,
-                      stroke: isSelected(el.id) ? '#1d4ed8' : 'transparent',
-                      strokeWidth: 3,
-                    }"
-                  />
-                  <v-text
-                    :config="{
-                      text: '▲ OUT',
-                      width: el.width,
-                      height: el.height * 0.55,
-                      align: 'center',
-                      verticalAlign: 'middle',
-                      fontSize: el.height * 0.28,
-                      fill: '#ffffff',
-                      fontStyle: 'bold',
-                      listening: false,
-                    }"
-                  />
-                  <v-text
-                    :config="{
-                      text: el.label,
-                      y: el.height * 0.55,
-                      width: el.width,
-                      height: el.height * 0.45,
-                      align: 'center',
-                      verticalAlign: 'middle',
-                      fontSize: el.height * 0.2,
-                      fill: 'rgba(255,255,255,0.85)',
-                      listening: false,
-                    }"
-                  />
-                </v-group>
-
-                <!-- Camera: FOV cone + body -->
-                <v-group
-                  v-else-if="el.type === 'camera'"
-                  :config="{
-                    id: el.id,
-                    draggable: elementDraggable(el),
-                    opacity: el.visible ? 1 : 0.3,
-                  }"
-                  @click="onElementClick(el.id, $event)"
-                  @dragmove="onElementDragMove(el.id, $event)"
-                  @dragend="onElementDragEnd(el.id, $event)"
-                >
+                  <!-- Invisible wide hit area so the boundary is clickable/deletable -->
                   <v-line
                     :config="{
-                      points: cameraFovPoints(el as CameraEl),
+                      points: b.points,
                       closed: true,
-                      fill: 'rgba(251,191,36,0.12)',
-                      stroke: 'rgba(251,191,36,0.5)',
-                      strokeWidth: 2,
+                      fill: 'rgba(0,0,0,0)',
+                      stroke: 'transparent',
+                      strokeWidth: 80 / (zoom || 1),
+                      hitStrokeWidth: 80 / (zoom || 1),
+                    }"
+                  />
+                  <!-- Fill -->
+                  <v-line
+                    :config="{
+                      points: b.points,
+                      closed: true,
+                      fill: `rgba(249,115,22,${b.fillOpacity})`,
+                      stroke: 'transparent',
+                      strokeWidth: 0,
                       listening: false,
                     }"
                   />
-                  <v-circle
+                  <!-- Dashed border -->
+                  <v-line
                     :config="{
-                      id: el.id,
-                      x: el.x,
-                      y: el.y,
-                      radius: 80,
-                      fill: isSelected(el.id) ? '#fbbf24' : '#f59e0b',
-                      stroke: isSelected(el.id) ? '#1d4ed8' : '#78350f',
-                      strokeWidth: isSelected(el.id) ? 3 : 1.5,
+                      points: b.points,
+                      closed: true,
+                      fill: 'transparent',
+                      stroke: isSelected(b.id) ? '#2563eb' : b.strokeColor,
+                      strokeWidth: isSelected(b.id)
+                        ? (b.strokeWidth * 1.5) / (zoom || 1)
+                        : b.strokeWidth / (zoom || 1),
+                      dash: [60, 30],
+                      lineCap: 'round',
+                      lineJoin: 'round',
+                      listening: false,
                     }"
                   />
-                  <v-text
+                  <!-- Corner dots -->
+                  <v-circle
+                    v-for="(_, pi) in Array.from({
+                      length: b.points.length / 2,
+                    })"
+                    :key="pi"
                     :config="{
-                      x: el.x - 50,
-                      y: el.y - 40,
-                      text: '📷',
-                      fontSize: 80,
+                      x: b.points[pi * 2],
+                      y: b.points[pi * 2 + 1],
+                      radius: 6 / (zoom || 1),
+                      fill: isSelected(b.id) ? '#2563eb' : b.strokeColor,
                       listening: false,
                     }"
                   />
                 </v-group>
+              </v-layer>
 
-                <!-- Sensor -->
+              <!-- ── Roads ───────────────────────────────────────────────── -->
+              <v-layer>
                 <v-group
-                  v-else-if="el.type === 'sensor'"
+                  v-for="road in roads"
+                  :key="road.id"
                   :config="{
-                    id: el.id,
-                    draggable: elementDraggable(el),
-                    opacity: el.visible ? 1 : 0.3,
+                    id: road.id,
+                    opacity: road.visible ? 1 : 0.3,
+                    draggable: elementDraggable(road),
                   }"
-                  @click="onElementClick(el.id, $event)"
-                  @dragmove="onElementDragMove(el.id, $event)"
-                  @dragend="onElementDragEnd(el.id, $event)"
+                  @click="onElementClick(road.id, $event)"
+                  @dragend="onElementDragEnd(road.id, $event)"
                 >
-                  <v-circle
+                  <!-- Invisible hit area -->
+                  <v-line
                     :config="{
-                      id: el.id,
-                      x: el.x,
-                      y: el.y,
-                      radius: 70,
-                      fill: isSelected(el.id) ? '#38bdf8' : '#0ea5e9',
-                      stroke: isSelected(el.id) ? '#1d4ed8' : '#0369a1',
-                      strokeWidth: isSelected(el.id) ? 3 : 1.5,
+                      points: road.points,
+                      stroke: 'transparent',
+                      strokeWidth: road.strokeWidth * 1.2,
+                      hitStrokeWidth: road.strokeWidth * 1.2,
+                      lineCap: 'butt',
+                      lineJoin: 'miter',
                     }"
                   />
-                  <v-text
+                  <!-- Curb / edge border -->
+                  <v-line
                     :config="{
-                      x: el.x - 40,
-                      y: el.y - 28,
-                      text: 'S',
-                      fontSize: 60,
-                      fill: '#ffffff',
-                      fontStyle: 'bold',
-                      fontFamily: 'ui-monospace, monospace',
+                      points: road.points,
+                      stroke: isSelected(road.id) ? '#93c5fd' : '#6b7280',
+                      strokeWidth: road.strokeWidth * 1.14,
+                      lineCap: 'butt',
+                      lineJoin: 'miter',
+                      listening: false,
+                    }"
+                  />
+                  <!-- Asphalt surface -->
+                  <v-line
+                    :config="{
+                      points: road.points,
+                      stroke: isSelected(road.id)
+                        ? '#3b82f6'
+                        : road.color || '#374151',
+                      strokeWidth: road.strokeWidth,
+                      lineCap: 'butt',
+                      lineJoin: 'miter',
+                      listening: false,
+                    }"
+                  />
+                  <!-- Center lane marking -->
+                  <v-line
+                    :config="{
+                      points: road.points,
+                      stroke:
+                        road.direction === 'one-way'
+                          ? 'rgba(255,255,255,0.7)'
+                          : '#fbbf24',
+                      strokeWidth: road.strokeWidth * 0.08,
+                      lineCap: 'butt',
+                      lineJoin: 'miter',
+                      dash:
+                        road.direction === 'one-way'
+                          ? undefined
+                          : [road.strokeWidth * 0.7, road.strokeWidth * 0.45],
                       listening: false,
                     }"
                   />
                 </v-group>
+              </v-layer>
 
-                <!-- Label -->
-                <v-text
-                  v-else-if="el.type === 'label'"
+              <!-- ── Parking slots ────────────────────────────────────────── -->
+              <v-layer>
+                <v-group
+                  v-for="slot in slots"
+                  :key="slot.id"
                   :config="{
-                    id: el.id,
-                    x: el.x,
-                    y: el.y,
-                    text: el.text,
-                    fontSize: el.fontSize,
-                    fill: isSelected(el.id) ? '#2563eb' : el.color,
-                    rotation: el.rotation,
-                    draggable: elementDraggable(el),
-                    opacity: el.visible ? 1 : 0.3,
+                    id: slot.id,
+                    x: slot.x,
+                    y: slot.y,
+                    rotation: slot.rotation,
+                    draggable: elementDraggable(slot),
+                    opacity: slot.visible ? 1 : 0.3,
                   }"
-                  @click="onElementClick(el.id, $event)"
-                  @dragmove="onElementDragMove(el.id, $event)"
-                  @dragend="onElementDragEnd(el.id, $event)"
+                  @click="onElementClick(slot.id, $event)"
+                  @dragmove="onElementDragMove(slot.id, $event)"
+                  @dragend="onElementDragEnd(slot.id, $event)"
+                >
+                  <!-- Asphalt base -->
+                  <v-rect
+                    :config="{
+                      width: slot.width,
+                      height: slot.height,
+                      fill: '#1e2330',
+                      stroke: isSelected(slot.id) ? '#2563eb' : '#111827',
+                      strokeWidth: isSelected(slot.id) ? 3 : 1,
+                    }"
+                  />
+                  <!-- Selection glow -->
+                  <v-rect
+                    v-if="isSelected(slot.id)"
+                    :config="{
+                      width: slot.width,
+                      height: slot.height,
+                      fill: 'rgba(37,99,235,0.12)',
+                      listening: false,
+                    }"
+                  />
+                  <!-- Left painted line -->
+                  <v-line
+                    :config="{
+                      points: [5, 0, 5, slot.height],
+                      stroke: 'rgba(255,255,255,0.85)',
+                      strokeWidth: 3,
+                      listening: false,
+                    }"
+                  />
+                  <!-- Right painted line -->
+                  <v-line
+                    :config="{
+                      points: [slot.width - 5, 0, slot.width - 5, slot.height],
+                      stroke: 'rgba(255,255,255,0.85)',
+                      strokeWidth: 3,
+                      listening: false,
+                    }"
+                  />
+                  <!-- Category color stripe at top (like a curb marking) -->
+                  <v-rect
+                    :config="{
+                      x: 5,
+                      y: 0,
+                      width: slot.width - 10,
+                      height: Math.max(6, Math.round(slot.height * 0.07)),
+                      fill: slotFill(slot),
+                      listening: false,
+                    }"
+                  />
+                  <!-- Slot code — floor lettering style -->
+                  <v-text
+                    :config="{
+                      text: slot.code,
+                      width: slot.width,
+                      height: slot.height,
+                      align: 'center',
+                      verticalAlign: 'middle',
+                      fontSize: Math.min(slot.width, slot.height) * 0.3,
+                      fontFamily: 'ui-monospace, monospace',
+                      fontStyle: 'bold',
+                      fill: 'rgba(255,255,255,0.88)',
+                      listening: false,
+                    }"
+                  />
+                  <!-- Category label at bottom -->
+                  <v-text
+                    :config="{
+                      text: slot.category.toUpperCase(),
+                      y:
+                        slot.height -
+                        Math.min(slot.width, slot.height) * 0.2 -
+                        6,
+                      width: slot.width,
+                      align: 'center',
+                      fontSize: Math.min(slot.width, slot.height) * 0.14,
+                      fontFamily: 'ui-sans-serif, sans-serif',
+                      fill: 'rgba(255,255,255,0.4)',
+                      listening: false,
+                    }"
+                  />
+                </v-group>
+              </v-layer>
+
+              <!-- ── Markers (entrance / exit / camera / sensor / label) ─── -->
+              <v-layer>
+                <template v-for="el in markers" :key="el.id">
+                  <!-- Entrance -->
+                  <v-group
+                    v-if="el.type === 'entrance'"
+                    :config="{
+                      id: el.id,
+                      x: el.x,
+                      y: el.y,
+                      rotation: el.rotation,
+                      draggable: elementDraggable(el),
+                      opacity: el.visible ? 1 : 0.3,
+                    }"
+                    @click="onElementClick(el.id, $event)"
+                    @dragmove="onElementDragMove(el.id, $event)"
+                    @dragend="onElementDragEnd(el.id, $event)"
+                  >
+                    <v-rect
+                      :config="{
+                        width: el.width,
+                        height: el.height,
+                        fill: '#16a34a',
+                        cornerRadius: 6,
+                        stroke: isSelected(el.id) ? '#1d4ed8' : 'transparent',
+                        strokeWidth: 3,
+                      }"
+                    />
+                    <v-text
+                      :config="{
+                        text: '▼ IN',
+                        width: el.width,
+                        height: el.height * 0.55,
+                        align: 'center',
+                        verticalAlign: 'middle',
+                        fontSize: el.height * 0.28,
+                        fill: '#ffffff',
+                        fontStyle: 'bold',
+                        listening: false,
+                      }"
+                    />
+                    <v-text
+                      :config="{
+                        text: el.label,
+                        y: el.height * 0.55,
+                        width: el.width,
+                        height: el.height * 0.45,
+                        align: 'center',
+                        verticalAlign: 'middle',
+                        fontSize: el.height * 0.2,
+                        fill: 'rgba(255,255,255,0.85)',
+                        listening: false,
+                      }"
+                    />
+                  </v-group>
+
+                  <!-- Exit -->
+                  <v-group
+                    v-else-if="el.type === 'exit'"
+                    :config="{
+                      id: el.id,
+                      x: el.x,
+                      y: el.y,
+                      rotation: el.rotation,
+                      draggable: elementDraggable(el),
+                      opacity: el.visible ? 1 : 0.3,
+                    }"
+                    @click="onElementClick(el.id, $event)"
+                    @dragmove="onElementDragMove(el.id, $event)"
+                    @dragend="onElementDragEnd(el.id, $event)"
+                  >
+                    <v-rect
+                      :config="{
+                        width: el.width,
+                        height: el.height,
+                        fill: '#dc2626',
+                        cornerRadius: 6,
+                        stroke: isSelected(el.id) ? '#1d4ed8' : 'transparent',
+                        strokeWidth: 3,
+                      }"
+                    />
+                    <v-text
+                      :config="{
+                        text: '▲ OUT',
+                        width: el.width,
+                        height: el.height * 0.55,
+                        align: 'center',
+                        verticalAlign: 'middle',
+                        fontSize: el.height * 0.28,
+                        fill: '#ffffff',
+                        fontStyle: 'bold',
+                        listening: false,
+                      }"
+                    />
+                    <v-text
+                      :config="{
+                        text: el.label,
+                        y: el.height * 0.55,
+                        width: el.width,
+                        height: el.height * 0.45,
+                        align: 'center',
+                        verticalAlign: 'middle',
+                        fontSize: el.height * 0.2,
+                        fill: 'rgba(255,255,255,0.85)',
+                        listening: false,
+                      }"
+                    />
+                  </v-group>
+
+                  <!-- Camera: FOV cone + body -->
+                  <v-group
+                    v-else-if="el.type === 'camera'"
+                    :config="{
+                      id: el.id,
+                      draggable: elementDraggable(el),
+                      opacity: el.visible ? 1 : 0.3,
+                    }"
+                    @click="onElementClick(el.id, $event)"
+                    @dragmove="onElementDragMove(el.id, $event)"
+                    @dragend="onElementDragEnd(el.id, $event)"
+                  >
+                    <v-line
+                      :config="{
+                        points: cameraFovPoints(el as CameraEl),
+                        closed: true,
+                        fill: 'rgba(251,191,36,0.12)',
+                        stroke: 'rgba(251,191,36,0.5)',
+                        strokeWidth: 2,
+                        listening: false,
+                      }"
+                    />
+                    <v-circle
+                      :config="{
+                        id: el.id,
+                        x: el.x,
+                        y: el.y,
+                        radius: 80,
+                        fill: isSelected(el.id) ? '#fbbf24' : '#f59e0b',
+                        stroke: isSelected(el.id) ? '#1d4ed8' : '#78350f',
+                        strokeWidth: isSelected(el.id) ? 3 : 1.5,
+                      }"
+                    />
+                    <v-text
+                      :config="{
+                        x: el.x - 50,
+                        y: el.y - 40,
+                        text: '📷',
+                        fontSize: 80,
+                        listening: false,
+                      }"
+                    />
+                  </v-group>
+
+                  <!-- Sensor -->
+                  <v-group
+                    v-else-if="el.type === 'sensor'"
+                    :config="{
+                      id: el.id,
+                      draggable: elementDraggable(el),
+                      opacity: el.visible ? 1 : 0.3,
+                    }"
+                    @click="onElementClick(el.id, $event)"
+                    @dragmove="onElementDragMove(el.id, $event)"
+                    @dragend="onElementDragEnd(el.id, $event)"
+                  >
+                    <v-circle
+                      :config="{
+                        id: el.id,
+                        x: el.x,
+                        y: el.y,
+                        radius: 70,
+                        fill: isSelected(el.id) ? '#38bdf8' : '#0ea5e9',
+                        stroke: isSelected(el.id) ? '#1d4ed8' : '#0369a1',
+                        strokeWidth: isSelected(el.id) ? 3 : 1.5,
+                      }"
+                    />
+                    <v-text
+                      :config="{
+                        x: el.x - 40,
+                        y: el.y - 28,
+                        text: 'S',
+                        fontSize: 60,
+                        fill: '#ffffff',
+                        fontStyle: 'bold',
+                        fontFamily: 'ui-monospace, monospace',
+                        listening: false,
+                      }"
+                    />
+                  </v-group>
+
+                  <!-- Label -->
+                  <v-text
+                    v-else-if="el.type === 'label'"
+                    :config="{
+                      id: el.id,
+                      x: el.x,
+                      y: el.y,
+                      text: el.text,
+                      fontSize: el.fontSize,
+                      fill: isSelected(el.id) ? '#2563eb' : el.color,
+                      rotation: el.rotation,
+                      draggable: elementDraggable(el),
+                      opacity: el.visible ? 1 : 0.3,
+                    }"
+                    @click="onElementClick(el.id, $event)"
+                    @dragmove="onElementDragMove(el.id, $event)"
+                    @dragend="onElementDragEnd(el.id, $event)"
+                  />
+                </template>
+              </v-layer>
+
+              <!-- ── Draw preview ─────────────────────────────────────────── -->
+              <v-layer :config="{ listening: false }">
+                <v-rect v-if="slotPreviewConfig" :config="slotPreviewConfig" />
+                <template v-if="roadPreviewConfigs">
+                  <v-line
+                    v-for="(cfg, i) in roadPreviewConfigs"
+                    :key="i"
+                    :config="cfg"
+                  />
+                </template>
+                <v-line
+                  v-if="boundaryPreviewConfig"
+                  :config="boundaryPreviewConfig"
                 />
-              </template>
-            </v-layer>
+                <v-rect v-if="selRectConfig" :config="selRectConfig" />
+              </v-layer>
 
-            <!-- ── Draw preview ─────────────────────────────────────────── -->
-            <v-layer :config="{ listening: false }">
-              <v-rect v-if="slotPreviewConfig" :config="slotPreviewConfig" />
-              <template v-if="roadPreviewConfigs">
-                <v-line v-for="(cfg, i) in roadPreviewConfigs" :key="i" :config="cfg" />
-              </template>
-              <v-rect v-if="selRectConfig" :config="selRectConfig" />
-            </v-layer>
+              <!-- ── Transformer (resize / rotate handles) ───────────────── -->
+              <v-layer>
+                <v-transformer
+                  ref="transformer"
+                  :config="{
+                    rotateEnabled: true,
+                    keepRatio: false,
+                    enabledAnchors: [
+                      'top-left',
+                      'top-right',
+                      'bottom-left',
+                      'bottom-right',
+                      'middle-left',
+                      'middle-right',
+                      'top-center',
+                      'bottom-center',
+                    ],
+                    anchorSize: 10,
+                    borderStroke: '#2563eb',
+                    anchorStroke: '#2563eb',
+                    anchorFill: '#ffffff',
+                  }"
+                  @transformend="onTransformEnd"
+                />
+              </v-layer>
+            </v-stage>
 
-            <!-- ── Transformer (resize / rotate handles) ───────────────── -->
-            <v-layer>
-              <v-transformer
-                ref="transformer"
-                :config="{
-                  rotateEnabled: true,
-                  keepRatio: false,
-                  enabledAnchors: [
-                    'top-left',
-                    'top-right',
-                    'bottom-left',
-                    'bottom-right',
-                    'middle-left',
-                    'middle-right',
-                    'top-center',
-                    'bottom-center',
-                  ],
-                  anchorSize: 10,
-                  borderStroke: '#2563eb',
-                  anchorStroke: '#2563eb',
-                  anchorFill: '#ffffff',
-                }"
-                @transformend="onTransformEnd"
-              />
-            </v-layer>
-          </v-stage>
+            <template #fallback>
+              <div
+                class="flex items-center justify-center h-full text-sm text-muted-foreground"
+              >
+                Loading canvas…
+              </div>
+            </template>
+          </client-only>
 
-          <template #fallback>
-            <div
-              class="flex items-center justify-center h-full text-sm text-muted-foreground"
-            >
-              Loading canvas…
-            </div>
-          </template>
-        </client-only>
-
-        <!-- Status bar -->
-        <div
-          class="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-1 text-[11px] text-muted-foreground bg-background/80 backdrop-blur border-t select-none pointer-events-none"
-        >
-          <span>
-            {{ activeTool }} tool
-            <span v-if="isDrawingRoad"> — double-click to finish road</span>
-          </span>
-          <span class="tabular-nums">
-            {{ Math.round(zoom * 100) }}% &nbsp;·&nbsp; x:{{ cursorPos.x }} y:{{
-              cursorPos.y
-            }}
-            &nbsp;·&nbsp; {{ elements.length }} elements &nbsp;·&nbsp;
-            {{ selectedIds.size }} selected
-          </span>
+          <!-- Status bar -->
+          <div
+            class="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-1 text-[11px] text-muted-foreground bg-background/80 backdrop-blur border-t select-none pointer-events-none"
+          >
+            <span>
+              {{ activeTool }} tool
+              <span v-if="isDrawingRoad">
+                — double-click or Enter to finish road</span
+              >
+              <span v-if="isDrawingBoundary">
+                — double-click or Enter to close boundary</span
+              >
+            </span>
+            <span class="tabular-nums">
+              {{ Math.round(zoom * 100) }}% &nbsp;·&nbsp; x:{{
+                cursorPos.x
+              }}
+              y:{{ cursorPos.y }} &nbsp;·&nbsp; {{ elements.length }} elements
+              &nbsp;·&nbsp; {{ selectedIds.size }} selected
+            </span>
+          </div>
         </div>
-      </div>
 
-      <!-- Property panel -->
-      <LotEditorPropertyPanel
-        :element="selectedElement"
-        :db-slots="dbSlots"
-        @update="updateElement"
-        @remove="removeElement"
-        @duplicate="duplicate"
-      />
+        <!-- Property panel -->
+        <LotEditorPropertyPanel
+          :element="selectedElement"
+          :db-slots="dbSlots"
+          @update="updateElement"
+          @remove="removeElement"
+          @duplicate="duplicate"
+        />
+      </div>
     </div>
 
     <!-- Hidden file inputs -->
