@@ -72,7 +72,7 @@ async function signOut() {
         </SidebarGroupContent>
       </SidebarGroup>
 
-      <SidebarGroup class="mt-auto">
+      <!-- <SidebarGroup class="mt-auto">
         <SidebarGroupContent>
           <SidebarMenu>
             <SidebarMenuItem>
@@ -85,7 +85,7 @@ async function signOut() {
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroupContent>
-      </SidebarGroup>
+      </SidebarGroup> -->
     </SidebarContent>
     <SidebarFooter>
       <div class="flex items-center gap-3">

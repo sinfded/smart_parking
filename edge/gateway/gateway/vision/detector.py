@@ -16,6 +16,12 @@ import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
+# opencv-python-headless removes GUI functions; stub them so ultralytics can import cleanly
+if not hasattr(cv2, "imshow"):
+    cv2.imshow = lambda *_: None
+    cv2.waitKey = lambda *_: -1
+    cv2.destroyAllWindows = lambda *_: None
+
 from ultralytics import YOLO
 
 

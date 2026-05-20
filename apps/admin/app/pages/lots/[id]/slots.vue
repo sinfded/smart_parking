@@ -131,6 +131,23 @@ async function deleteSlot(slotId: string) {
 // ── CSV export ────────────────────────────────────────────────────────────────
 const exportLoading = ref(false);
 
+function csvCell(v: string | number | null | undefined) {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  return s.includes(",") || s.includes('"') || s.includes("\n")
+    ? `"${s.replace(/"/g, '""')}"`
+    : s;
+}
+
+function downloadCsv(rows: string[], filename: string) {
+  const url = URL.createObjectURL(new Blob([rows.join("\n")], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function exportCsv() {
   if (!slots.value.length) return;
   exportLoading.value = true;
@@ -141,44 +158,50 @@ async function exportCsv() {
 
   const { data } = await client
     .from("slot_events")
-    .select("slot_id, new_state, occurred_at")
+    .select("slot_id, new_state, source, occurred_at")
     .in("slot_id", slotIds)
     .order("occurred_at", { ascending: true });
 
-  const rows = data ?? [];
+  const lotName = lot.value?.name ?? lotId;
+  const events = data ?? [];
 
-  // pivot: { occurred_at → { slot_label → new_state } }
-  const pivot = new Map<string, Record<string, string>>();
-  for (const r of rows) {
-    if (!pivot.has(r.occurred_at)) pivot.set(r.occurred_at, {});
-    const state = r.new_state === "occupied" ? "1" : r.new_state === "free" ? "0" : "";
-    pivot.get(r.occurred_at)![labelById[r.slot_id] ?? r.slot_id] = state;
-  }
+  function buildPivot(source: string) {
+    const filtered = events.filter((e) => e.source === source);
+    if (!filtered.length) return null;
 
-  // forward-fill: carry each slot's last known value into rows where it has no event
-  const lastKnown: Record<string, string> = {};
-  for (const cells of pivot.values()) {
-    for (const label of slotLabels) {
-      if (cells[label] !== undefined && cells[label] !== "") {
-        lastKnown[label] = cells[label];
-      } else if (lastKnown[label] !== undefined) {
-        cells[label] = lastKnown[label];
+    // occurred_at → { slot_label → "1" | "0" }
+    const pivot = new Map<string, Record<string, string>>();
+    for (const r of filtered) {
+      if (!pivot.has(r.occurred_at)) pivot.set(r.occurred_at, {});
+      const cell = r.new_state === "occupied" ? "1" : r.new_state === "free" ? "0" : "";
+      pivot.get(r.occurred_at)![labelById[r.slot_id] ?? r.slot_id] = cell;
+    }
+
+    // Forward-fill: carry each slot's last known state into rows where it didn't change
+    const lastKnown: Record<string, string> = {};
+    for (const cells of pivot.values()) {
+      for (const label of slotLabels) {
+        if (cells[label] !== undefined && cells[label] !== "") {
+          lastKnown[label] = cells[label];
+        } else if (lastKnown[label] !== undefined) {
+          cells[label] = lastKnown[label];
+        }
       }
     }
+
+    const header = ["occurred_at", ...slotLabels];
+    const rows = [header.join(",")];
+    for (const [ts, cells] of pivot) {
+      rows.push([csvCell(ts), ...slotLabels.map((l) => cells[l] ?? "")].join(","));
+    }
+    return rows;
   }
 
-  const header = ["occurred_at", ...slotLabels];
-  const csvRows = [header.join(",")];
-  for (const [ts, cells] of pivot) {
-    csvRows.push([ts, ...slotLabels.map((l) => cells[l] ?? "")].join(","));
-  }
+  const ultrasonicRows = buildPivot("ultrasonic");
+  const cameraRows     = buildPivot("camera");
 
-  const url = URL.createObjectURL(new Blob([csvRows.join("\n")], { type: "text/csv" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `slot_events_${lot.value?.name ?? lotId}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  if (ultrasonicRows) downloadCsv(ultrasonicRows, `ultrasonic_${lotName}.csv`);
+  if (cameraRows)     downloadCsv(cameraRows,     `camera_${lotName}.csv`);
 
   exportLoading.value = false;
 }

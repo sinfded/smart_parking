@@ -5,6 +5,7 @@ const lotId = route.params.id as string;
 const tabs = [
   { href: `/lots/${lotId}`, label: "Overview", exact: true },
   { href: `/lots/${lotId}/slots`, label: "Slots" },
+  { href: `/lots/${lotId}/layout`, label: "Layout" },
   { href: `/lots/${lotId}/cameras`, label: "Cameras" },
   { href: `/lots/${lotId}/members`, label: "Members" },
   { href: `/lots/${lotId}/settings`, label: "Settings" },

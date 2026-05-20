@@ -316,6 +316,10 @@ create policy "gateways read"  on public.gateways for select using (public.is_lo
 create policy "gateways write" on public.gateways for all
   using (public.is_lot_manager(lot_id))
   with check (public.is_lot_manager(lot_id));
+-- Gateway service account can update its own heartbeat fields (last_seen_at)
+create policy "gateways self update" on public.gateways for update
+  using (auth_user_id = auth.uid())
+  with check (auth_user_id = auth.uid());
 
 -- slot_events: members read full history; gateways insert
 create policy "events member read" on public.slot_events for select
