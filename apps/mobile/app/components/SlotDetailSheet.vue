@@ -7,11 +7,13 @@ const props = defineProps<{
   slot: ParkingSlotEl | null;
   status: SlotStatus | null;
   distanceM?: number | null;
-  lotAddress?: string | null;
+  lotLat?: number | null;
+  lotLng?: number | null;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
 
+const router = useRouter();
 const isOpen = computed(() => !!props.slot);
 
 const statusLabel: Record<SlotStatus, string> = {
@@ -40,10 +42,14 @@ const categoryColor = computed(() =>
   props.slot ? (SLOT_COLORS[props.slot.category] ?? "#6366f1") : "#6366f1",
 );
 
-const directionsUrl = computed(() => {
-  if (!props.lotAddress) return null;
-  return `https://maps.google.com/?q=${encodeURIComponent(props.lotAddress)}`;
-});
+const hasLocation = computed(
+  () => props.lotLat != null && props.lotLng != null,
+);
+
+function openOnMap() {
+  emit("close");
+  router.push(`/?view=map&lat=${props.lotLat}&lng=${props.lotLng}`);
+}
 </script>
 
 <template>
@@ -133,17 +139,15 @@ const directionsUrl = computed(() => {
         </div>
       </div>
 
-      <!-- Get directions CTA (only when slot is available) -->
-      <div v-if="status === 'free' && directionsUrl" class="px-5 pb-5">
-        <a
-          :href="directionsUrl"
-          target="_blank"
-          rel="noopener"
+      <!-- Show on map CTA (only when slot is available and lot has GPS) -->
+      <div v-if="status === 'free' && hasLocation" class="px-5 pb-5">
+        <button
           class="flex items-center justify-center gap-2 w-full h-11 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-white text-sm font-semibold transition-colors"
+          @click="openOnMap"
         >
           <Navigation class="size-4" />
-          Get directions to lot
-        </a>
+          Show lot on map
+        </button>
       </div>
     </div>
   </Transition>

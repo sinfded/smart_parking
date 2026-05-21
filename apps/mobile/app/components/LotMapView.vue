@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Map, Marker, TileLayer } from "leaflet";
+import type { Map, Marker } from "leaflet";
 
 interface LotPin {
   lot_id: string;
@@ -15,12 +15,13 @@ const props = defineProps<{
   lots: LotPin[];
   userLat?: number | null;
   userLng?: number | null;
+  centerLat?: number | null;
+  centerLng?: number | null;
 }>();
 
 // ── Leaflet instances (not reactive — plain refs avoid proxy overhead on maps) ─
 const mapRef = useTemplateRef<HTMLDivElement>("mapEl");
 let map: Map | null = null;
-let tileLayer: TileLayer | null = null;
 let lotMarkers: Marker[] = [];
 let userMarker: Marker | null = null;
 
@@ -75,18 +76,15 @@ function popupHtml(lot: LotPin): string {
 // ── Map lifecycle ─────────────────────────────────────────────────────────────
 
 onMounted(async () => {
-  const L = (await import("leaflet")).default;
+  const L = await import("leaflet");
   if (!mapRef.value) return;
 
   map = L.map(mapRef.value, { zoomControl: true });
 
-  tileLayer = L.tileLayer(
-    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    {
-      attribution: "© OpenStreetMap contributors",
-      maxZoom: 19,
-    },
-  ).addTo(map);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap contributors",
+    maxZoom: 19,
+  }).addTo(map);
 
   renderLotMarkers(L);
   renderUserMarker(L);
@@ -124,7 +122,7 @@ function clearLotMarkers() {
   lotMarkers = [];
 }
 
-function renderLotMarkers(L: typeof import("leaflet").default) {
+function renderLotMarkers(L: typeof import("leaflet")) {
   for (const lot of props.lots) {
     if (lot.lat == null || lot.lng == null) continue;
     const icon = L.divIcon({
@@ -141,7 +139,7 @@ function renderLotMarkers(L: typeof import("leaflet").default) {
   }
 }
 
-function renderUserMarker(L: typeof import("leaflet").default) {
+function renderUserMarker(L: typeof import("leaflet")) {
   userMarker?.remove();
   userMarker = null;
   if (props.userLat == null || props.userLng == null) return;
@@ -157,9 +155,13 @@ function renderUserMarker(L: typeof import("leaflet").default) {
   userMarker = L.marker([props.userLat, props.userLng], { icon }).addTo(map!);
 }
 
-function fitView(L: typeof import("leaflet").default) {
+function fitView(L: typeof import("leaflet")) {
   if (props.userLat != null && props.userLng != null) {
     map!.setView([props.userLat, props.userLng], 15);
+    return;
+  }
+  if (props.centerLat != null && props.centerLng != null) {
+    map!.setView([props.centerLat, props.centerLng], 17);
     return;
   }
   const valid = props.lots.filter((l) => l.lat != null && l.lng != null);
@@ -168,7 +170,8 @@ function fitView(L: typeof import("leaflet").default) {
     return;
   }
   if (valid.length === 1) {
-    map!.setView([valid[0].lat!, valid[0].lng!], 15);
+    const pin = valid[0]!;
+    map!.setView([pin.lat!, pin.lng!], 15);
     return;
   }
   const bounds = L.latLngBounds(

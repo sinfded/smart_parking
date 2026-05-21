@@ -23,6 +23,8 @@ interface LotAvailability {
   total_slots: number;
   free_slots: number;
   occupied_slots: number;
+  lat: number | null;
+  lng: number | null;
 }
 
 interface Zone {
@@ -394,7 +396,8 @@ function highlightNearest() {
       :slot="selectedSlot"
       :status="selectedStatus"
       :distance-m="distanceM"
-      :lot-address="lot?.address ?? null"
+      :lot-lat="lot?.lat ?? null"
+      :lot-lng="lot?.lng ?? null"
       @close="selectedSlot = null"
     />
   </NuxtLayout>

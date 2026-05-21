@@ -5,6 +5,7 @@ import type {
   SlotStatus,
 } from "@smart-parking/types";
 import { STATUS_COLORS, SLOT_COLORS } from "@smart-parking/types";
+import { MaximizeIcon } from "lucide-vue-next";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -182,7 +183,10 @@ function fitToContent() {
   const el = wrapperRef.value;
   if (!el) return;
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   let hasBounds = false;
 
   // Prefer boundary bounding box
@@ -209,18 +213,26 @@ function fitToContent() {
   }
 
   if (!hasBounds) {
-    minX = 0; minY = 0; maxX = cw.value; maxY = ch.value;
+    minX = 0;
+    minY = 0;
+    maxX = cw.value;
+    maxY = ch.value;
   }
 
   const pad = hasBounds
     ? Math.min((maxX - minX) * 0.05, (maxY - minY) * 0.05, 150)
     : 0;
-  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+  minX -= pad;
+  minY -= pad;
+  maxX += pad;
+  maxY += pad;
 
   const bboxW = maxX - minX;
   const bboxH = maxY - minY;
   const rect = el.getBoundingClientRect();
-  const newScale = clampScale(Math.min(rect.width / bboxW, rect.height / bboxH));
+  const newScale = clampScale(
+    Math.min(rect.width / bboxW, rect.height / bboxH),
+  );
   panX.value = (rect.width - bboxW * newScale) / 2 - minX * newScale;
   panY.value = (rect.height - bboxH * newScale) / 2 - minY * newScale;
   scale.value = newScale;
@@ -350,8 +362,13 @@ const transform = computed(
           <!-- ── Property boundaries ──────────────────────────────────── -->
           <g v-for="b in boundaries" :key="b.id">
             <polygon
-              :points="(b as any).points.reduce((acc: string, v: number, i: number) =>
-                i % 2 === 0 ? acc + (acc ? ' ' : '') + v : acc + ',' + v, '')"
+              :points="
+                (b as any).points.reduce(
+                  (acc: string, v: number, i: number) =>
+                    i % 2 === 0 ? acc + (acc ? ' ' : '') + v : acc + ',' + v,
+                  '',
+                )
+              "
               :fill="`rgba(249,115,22,${(b as any).fillOpacity})`"
               :stroke="(b as any).strokeColor"
               :stroke-width="(b as any).strokeWidth"
@@ -651,10 +668,10 @@ const transform = computed(
 
     <!-- Reset view button -->
     <button
-      class="absolute top-2 right-2 bg-zinc-800/90 backdrop-blur border border-zinc-700 rounded-lg px-3 py-1.5 text-[11px] text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors"
+      class="absolute top-3 right-3 bg-zinc-800/90 backdrop-blur border border-zinc-700 rounded-lg p-1.5 text-[11px] text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors"
       @click="resetView"
     >
-      Reset view
+      <MaximizeIcon class="size-4" />
     </button>
 
     <!-- Legend -->

@@ -24,6 +24,7 @@ interface LotSummary {
 
 const client = useSupabaseClient();
 const { geocode } = useNominatim();
+const route = useRoute();
 
 const searchQuery = ref("");
 const mode = ref<"all" | "nearby">("all");
@@ -34,6 +35,8 @@ const gpsLoading = ref(false);
 const errorMsg = ref<string | null>(null);
 const userLat = ref<number | null>(null);
 const userLng = ref<number | null>(null);
+const centerLat = ref<number | null>(null);
+const centerLng = ref<number | null>(null);
 
 async function fetchAll() {
   loading.value = true;
@@ -137,6 +140,17 @@ const resultLabel = computed(() => {
 });
 
 await fetchAll();
+
+// Open map centered on a specific lot when navigated from the lot detail page
+if (route.query.view === "map") {
+  view.value = "map";
+  const qLat = parseFloat(route.query.lat as string);
+  const qLng = parseFloat(route.query.lng as string);
+  if (!isNaN(qLat) && !isNaN(qLng)) {
+    centerLat.value = qLat;
+    centerLng.value = qLng;
+  }
+}
 </script>
 
 <template>
@@ -262,6 +276,8 @@ await fetchAll();
           :lots="lotsWithLocation"
           :user-lat="userLat"
           :user-lng="userLng"
+          :center-lat="centerLat"
+          :center-lng="centerLng"
         />
         <template #fallback>
           <div
