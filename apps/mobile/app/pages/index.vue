@@ -1,96 +1,105 @@
 <script setup lang="ts">
-import { Search, LocateFixed, Loader2, X } from 'lucide-vue-next'
+import { Search, LocateFixed, Loader2, X } from "lucide-vue-next";
 
 interface LotSummary {
-  lot_id: string
-  name: string
-  address: string | null
-  total_slots: number
-  free_slots: number
-  occupied_slots: number
-  other_slots: number
-  distance_meters?: number
+  lot_id: string;
+  name: string;
+  address: string | null;
+  total_slots: number;
+  free_slots: number;
+  occupied_slots: number;
+  other_slots: number;
+  distance_meters?: number;
 }
 
-const client = useSupabaseClient()
-const { geocode } = useNominatim()
+const client = useSupabaseClient();
+const { geocode } = useNominatim();
 
-const searchQuery = ref('')
-const mode = ref<'all' | 'nearby'>('all')
-const lots = ref<LotSummary[]>([])
-const loading = ref(true)
-const gpsLoading = ref(false)
-const errorMsg = ref<string | null>(null)
+const searchQuery = ref("");
+const mode = ref<"all" | "nearby">("all");
+const lots = ref<LotSummary[]>([]);
+const loading = ref(true);
+const gpsLoading = ref(false);
+const errorMsg = ref<string | null>(null);
 
 async function fetchAll() {
-  loading.value = true
-  errorMsg.value = null
-  const { data, error } = await client.from('lot_availability' as any).select('*')
-  loading.value = false
-  if (error) { errorMsg.value = error.message; return }
-  lots.value = (data ?? []) as unknown as LotSummary[]
+  loading.value = true;
+  errorMsg.value = null;
+  const { data, error } = await client
+    .from("lot_availability" as any)
+    .select("*");
+  loading.value = false;
+  if (error) {
+    errorMsg.value = error.message;
+    return;
+  }
+  lots.value = (data ?? []) as unknown as LotSummary[];
 }
 
 async function fetchNearby(lat: number, lng: number) {
-  loading.value = true
-  errorMsg.value = null
-  const { data, error } = await client.rpc('lots_nearby' as any, {
+  loading.value = true;
+  errorMsg.value = null;
+  const { data, error } = await client.rpc("lots_nearby" as any, {
     p_lat: lat,
     p_lng: lng,
     p_radius_meters: 5000,
-  })
-  loading.value = false
-  if (error) { errorMsg.value = error.message; return }
-  lots.value = (data ?? []) as unknown as LotSummary[]
+  } as any);
+  loading.value = false;
+  if (error) {
+    errorMsg.value = error.message;
+    return;
+  }
+  lots.value = (data ?? []) as unknown as LotSummary[];
 }
 
 async function onSearch() {
   if (!searchQuery.value.trim()) {
-    mode.value = 'all'
-    await fetchAll()
-    return
+    mode.value = "all";
+    await fetchAll();
+    return;
   }
-  loading.value = true
-  errorMsg.value = null
-  const coords = await geocode(searchQuery.value.trim()).catch(() => null)
+  loading.value = true;
+  errorMsg.value = null;
+  const coords = await geocode(searchQuery.value.trim()).catch(() => null);
   if (!coords) {
-    loading.value = false
-    errorMsg.value = 'Location not found. Try a different search.'
-    return
+    loading.value = false;
+    errorMsg.value = "Location not found. Try a different search.";
+    return;
   }
-  mode.value = 'nearby'
-  await fetchNearby(coords.lat, coords.lng)
+  mode.value = "nearby";
+  await fetchNearby(coords.lat, coords.lng);
 }
 
 function onGPS() {
   if (!navigator.geolocation) {
-    errorMsg.value = 'Geolocation is not supported by your browser.'
-    return
+    errorMsg.value = "Geolocation is not supported by your browser.";
+    return;
   }
-  gpsLoading.value = true
-  errorMsg.value = null
+  gpsLoading.value = true;
+  errorMsg.value = null;
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
-      gpsLoading.value = false
-      mode.value = 'nearby'
-      searchQuery.value = ''
-      await fetchNearby(pos.coords.latitude, pos.coords.longitude)
+      gpsLoading.value = false;
+      mode.value = "nearby";
+      searchQuery.value = "";
+      await fetchNearby(pos.coords.latitude, pos.coords.longitude);
     },
     () => {
-      gpsLoading.value = false
-      errorMsg.value = 'Could not get your location. Allow location access and try again.'
+      gpsLoading.value = false;
+      errorMsg.value =
+        "Could not get your location. Allow location access and try again.";
     },
-    { enableHighAccuracy: true, timeout: 10_000 }
-  )
+    { enableHighAccuracy: true, timeout: 10_000 },
+  );
 }
 
 function onClear() {
-  searchQuery.value = ''
-  mode.value = 'all'
-  fetchAll()
+  searchQuery.value = "";
+  mode.value = "all";
+  fetchAll();
 }
 
-await fetchAll()
+await fetchAll();
 </script>
 
 <template>
@@ -100,7 +109,9 @@ await fetchAll()
     <!-- Search bar -->
     <div class="flex gap-2 mb-4">
       <div class="relative flex-1">
-        <Search class="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+        <Search
+          class="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none"
+        />
         <input
           v-model="searchQuery"
           type="search"
@@ -115,7 +126,10 @@ await fetchAll()
         aria-label="Use my location"
         @click="onGPS"
       >
-        <Loader2 v-if="gpsLoading" class="size-4 animate-spin text-muted-foreground" />
+        <Loader2
+          v-if="gpsLoading"
+          class="size-4 animate-spin text-muted-foreground"
+        />
         <LocateFixed v-else class="size-4 text-muted-foreground" />
       </button>
       <button
@@ -139,7 +153,7 @@ await fetchAll()
 
     <!-- Skeleton loading state -->
     <div v-if="loading" class="flex flex-col gap-3">
-      <Skeleton v-for="n in 4" :key="n" class="h-[100px] w-full rounded-xl" />
+      <Skeleton v-for="n in 4" :key="n" class="h-25 w-full rounded-xl" />
     </div>
 
     <!-- Lot list -->
@@ -160,7 +174,9 @@ await fetchAll()
     <div v-else class="text-center py-20 text-muted-foreground">
       <LocateFixed class="size-8 mx-auto mb-3 opacity-30" />
       <p class="text-sm">No parking lots found.</p>
-      <p v-if="mode === 'nearby'" class="text-xs mt-1">Try expanding your search area.</p>
+      <p v-if="mode === 'nearby'" class="text-xs mt-1">
+        Try expanding your search area.
+      </p>
     </div>
   </NuxtLayout>
 </template>

@@ -257,8 +257,8 @@ export function useLotEditor(
   function newSlot(
     x: number,
     y: number,
-    w = SLOT_W,
-    h = SLOT_H,
+    w: number = SLOT_W,
+    h: number = SLOT_H,
   ): ParkingSlotEl {
     const snapped = snapPos({ x, y });
     return {

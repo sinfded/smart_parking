@@ -41,8 +41,10 @@ INFER_H         = 450
 @dataclasses.dataclass
 class AppConfig:
     confidence:           float = 0.35
-    debounce_frames:      int   = 3   # consecutive frames to confirm occupied
-    debounce_frames_free: int   = 10  # consecutive frames to confirm free
+    debounce_frames:      int   = 4    # votes needed in window to confirm occupied
+    debounce_frames_free: int   = 6    # "free" votes needed in window to confirm free
+    window_size:          int   = 8    # rolling window length for both transitions
+    overlap_threshold:    float = 0.40 # min box/polygon overlap ratio to count as a hit
     min_duration:         int   = 5
     api_host:             str   = "0.0.0.0"
     api_port:             int   = 8000
@@ -229,8 +231,10 @@ class SupabaseClient:
         r = rows[0]
         return AppConfig(
             confidence=float(r.get("confidence", 0.35)),
-            debounce_frames=int(r.get("debounce_frames", 3)),
-            debounce_frames_free=int(r.get("debounce_frames_free", 10)),
+            debounce_frames=int(r.get("debounce_frames", 4)),
+            debounce_frames_free=int(r.get("debounce_frames_free", 6)),
+            window_size=int(r.get("window_size", 8)),
+            overlap_threshold=float(r.get("overlap_threshold", 0.40)),
             min_duration=int(r.get("min_duration", 5)),
             api_host=r.get("api_host", "0.0.0.0"),
             api_port=int(r.get("api_port", 8000)),
@@ -596,14 +600,13 @@ class HeadlessRunner:
                            else [None] * len(camera_urls)
         self.db_logger   = SupabaseLogger(db) if db and db.available else None
 
-        self.slot_rois:          list = [[] for _ in camera_urls]
-        self.slot_state:         dict = {}
-        self.slot_enter_counter: dict = {}  # consecutive detected frames
-        self.slot_exit_counter:  dict = {}  # consecutive not-detected frames
-        self.slot_enter_time:    dict = {}
-        self.slot_confidence:    dict = {}  # latest detection confidence per slot
-        self.slot_ids:           dict = {}  # (cam_idx, slot_idx) → slots.id UUID
-        self.last_frame_ids:     list = [0] * len(camera_urls)
+        self.slot_rois:       list = [[] for _ in camera_urls]
+        self.slot_state:      dict = {}
+        self.slot_window:     dict = {}  # deque[bool] per slot — rolling detection window
+        self.slot_enter_time: dict = {}
+        self.slot_confidence: dict = {}  # latest per-frame confidence per slot
+        self.slot_ids:        dict = {}  # (cam_idx, slot_idx) → slots.id UUID
+        self.last_frame_ids:  list = [0] * len(camera_urls)
         self.running = True
 
         self._load_slots(slot_regions or [])
@@ -629,11 +632,10 @@ class HeadlessRunner:
                 self.slot_ids[(cam_idx, slot_idx)] = slot_id
                 key           = (cam_idx, slot_idx)
                 initial_state = db_state.get(slot_id, False)
-                self.slot_state[key]         = initial_state
-                self.slot_enter_counter[key] = 0
-                self.slot_exit_counter[key]  = 0
-                self.slot_enter_time[key]    = None
-                self.slot_confidence[key]    = 0.0
+                self.slot_state[key]      = initial_state
+                self.slot_window[key]     = deque(maxlen=self.config.window_size)
+                self.slot_enter_time[key] = None
+                self.slot_confidence[key] = 0.0
                 self.state.update_slot(cam_idx, slot_idx, initial_state, None)
             self._log(f"Loaded {sum(len(p) for p in self.slot_rois)} slot(s) from Supabase")
             return
@@ -649,10 +651,9 @@ class HeadlessRunner:
             self.slot_rois[cam_idx] = polygons
             for slot_idx in range(len(polygons)):
                 key = (cam_idx, slot_idx)
-                self.slot_state[key]         = False
-                self.slot_enter_counter[key] = 0
-                self.slot_exit_counter[key]  = 0
-                self.slot_enter_time[key]    = None
+                self.slot_state[key]      = False
+                self.slot_window[key]     = deque(maxlen=self.config.window_size)
+                self.slot_enter_time[key] = None
                 self.state.update_slot(cam_idx, slot_idx, False, None)
         self._log(f"Loaded {sum(len(p) for p in loaded)} slot(s) from {SLOT_FILE}")
 
@@ -674,7 +675,7 @@ class HeadlessRunner:
         }
         self.slot_rois       = [[] for _ in self.streams]
         self.slot_state      = {}
-        self.slot_counter    = {}
+        self.slot_window     = {}
         self.slot_enter_time = {}
         self.slot_confidence = {}
         self.slot_ids        = {}
@@ -691,11 +692,10 @@ class HeadlessRunner:
                 self.slot_ids[(cam_idx, slot_idx)] = slot_id
                 key           = (cam_idx, slot_idx)
                 initial_state = db_state.get(slot_id, False)
-                self.slot_state[key]         = initial_state
-                self.slot_enter_counter[key] = 0
-                self.slot_exit_counter[key]  = 0
-                self.slot_enter_time[key]    = None
-                self.slot_confidence[key]    = 0.0
+                self.slot_state[key]      = initial_state
+                self.slot_window[key]     = deque(maxlen=self.config.window_size)
+                self.slot_enter_time[key] = None
+                self.slot_confidence[key] = 0.0
                 self.state.update_slot(cam_idx, slot_idx, initial_state, None)
         total = sum(len(r) for r in self.slot_rois)
         self._log(f"Regions reloaded — {total} slot(s) active")
@@ -709,6 +709,25 @@ class HeadlessRunner:
             return arr
         except (ValueError, TypeError):
             return None
+
+    @staticmethod
+    def _box_poly_overlap_ratio(pts: np.ndarray,
+                                 x1: int, y1: int, x2: int, y2: int) -> float:
+        """Fraction of the bounding box area that overlaps the slot polygon."""
+        box_area = max((x2 - x1) * (y2 - y1), 1)
+        px_min, py_min = int(pts[:, 0].min()), int(pts[:, 1].min())
+        px_max, py_max = int(pts[:, 0].max()), int(pts[:, 1].max())
+        ix1 = max(x1, px_min)
+        iy1 = max(y1, py_min)
+        ix2 = min(x2, px_max)
+        iy2 = min(y2, py_max)
+        if ix2 <= ix1 or iy2 <= iy1:
+            return 0.0
+        w, h = ix2 - ix1, iy2 - iy1
+        mask = np.zeros((h, w), dtype=np.uint8)
+        shifted = (pts - np.array([ix1, iy1])).astype(np.int32)
+        cv2.fillPoly(mask, [shifted], 1)
+        return int(mask.sum()) / box_area
 
     def _annotate(self, cam_idx: int, display, boxes):
         for bx1, by1, bx2, by2, conf in boxes:
@@ -742,8 +761,9 @@ class HeadlessRunner:
             self._reload_flag.clear()
             self._do_reload()
 
-        debounce_enter = self.config.debounce_frames
-        debounce_free  = self.config.debounce_frames_free
+        debounce_enter     = self.config.debounce_frames
+        debounce_free      = self.config.debounce_frames_free
+        overlap_threshold  = self.config.overlap_threshold
         for cam_idx in range(len(self.streams)):
             frame, boxes, frame_id = self.worker.get(cam_idx)
             if frame is None or frame_id == self.last_frame_ids[cam_idx]:
@@ -760,26 +780,21 @@ class HeadlessRunner:
                     continue
                 hits = [
                     b for b in boxes
-                    if cv2.pointPolygonTest(
-                        pts,
-                        (int((b[0] + b[2]) / 2), int((b[1] + b[3]) / 2)),
-                        False,
-                    ) >= 0
+                    if self._box_poly_overlap_ratio(pts, b[0], b[1], b[2], b[3])
+                    >= overlap_threshold
                 ]
                 detected = len(hits) > 0
-                if detected:
-                    self.slot_confidence[key] = max(b[4] for b in hits)
-                    self.slot_enter_counter[key] = min(debounce_enter, self.slot_enter_counter[key] + 1)
-                    self.slot_exit_counter[key]  = 0
-                else:
-                    self.slot_confidence[key]    = 0.0
-                    self.slot_exit_counter[key]  = min(debounce_free, self.slot_exit_counter[key] + 1)
-                    self.slot_enter_counter[key] = 0
+                self.slot_confidence[key] = max((b[4] for b in hits), default=0.0)
+
+                win = self.slot_window[key]
+                win.append(detected)
+                true_votes  = sum(win)
+                false_votes = len(win) - true_votes
 
                 currently = self.slot_state[key]
-                if not currently and self.slot_enter_counter[key] >= debounce_enter:
+                if not currently and true_votes >= debounce_enter:
                     stable = True
-                elif currently and self.slot_exit_counter[key] >= debounce_free:
+                elif currently and false_votes >= debounce_free:
                     stable = False
                 else:
                     stable = currently
@@ -809,7 +824,7 @@ class HeadlessRunner:
                         self.slot_enter_time[key] = None
                         if self.db_logger and slot_id:
                             self.db_logger.report_state(slot_id, "free",
-                                                        confidence=self.config.confidence)
+                                                        confidence=None)
 
             self._annotate(cam_idx, frame, boxes)
 
