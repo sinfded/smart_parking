@@ -241,51 +241,51 @@ function highlightNearest() {
     </div>
 
     <template v-else-if="lot">
-      <!-- Stats bar -->
-      <div class="rounded-xl border border-border bg-card px-4 py-2.5 mb-2">
-        <div class="flex justify-between items-center">
-          <span class="text-sm text-muted-foreground">Available</span>
-          <div class="flex items-center gap-2 flex-1 mx-3">
-            <Progress :model-value="occupancyPercent" class="h-1.5 flex-1" />
+      <!-- Stats hero -->
+      <div class="rounded-xl border border-border bg-card px-4 pt-3.5 pb-3 mb-3">
+        <div class="grid grid-cols-3 divide-x divide-border text-center mb-3">
+          <div class="pr-4">
+            <p class="text-2xl font-bold tabular-nums text-emerald-500">{{ freeCount }}</p>
+            <p class="text-xs text-muted-foreground mt-0.5">Free</p>
           </div>
-          <span class="font-bold text-sm tabular-nums">
-            {{ freeCount
-            }}<span class="text-muted-foreground font-normal">
-              / {{ totalCount }}</span
-            >
-          </span>
+          <div class="px-4">
+            <p class="text-2xl font-bold tabular-nums text-red-500">{{ totalCount - freeCount }}</p>
+            <p class="text-xs text-muted-foreground mt-0.5">Occupied</p>
+          </div>
+          <div class="pl-4">
+            <p class="text-2xl font-bold tabular-nums">{{ totalCount }}</p>
+            <p class="text-xs text-muted-foreground mt-0.5">Total</p>
+          </div>
         </div>
-        <p
-          v-if="lot.address"
-          class="text-xs text-muted-foreground mt-1 line-clamp-1"
-        >
+        <Progress :model-value="occupancyPercent" class="h-2" />
+        <p v-if="lot.address" class="text-xs text-muted-foreground mt-2 line-clamp-1">
           {{ lot.address }}
         </p>
       </div>
 
       <!-- View toggle -->
-      <div class="flex rounded-lg border border-border overflow-hidden mb-2">
+      <div class="flex gap-1.5 p-1 rounded-xl bg-muted mb-3">
         <button
-          class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium transition-colors"
+          class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-medium rounded-lg transition-all"
           :class="
             view === 'map'
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-background text-muted-foreground hover:bg-muted'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
           "
           @click="view = 'map'"
         >
-          <MapIcon class="size-3.5" /> Map
+          <MapIcon class="size-4" /> Map
         </button>
         <button
-          class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium transition-colors"
+          class="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-medium rounded-lg transition-all"
           :class="
             view === 'grid'
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-background text-muted-foreground hover:bg-muted'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
           "
           @click="view = 'grid'"
         >
-          <LayoutGrid class="size-3.5" /> Grid
+          <LayoutGrid class="size-4" /> Grid
         </button>
       </div>
 
@@ -394,6 +394,7 @@ function highlightNearest() {
       :slot="selectedSlot"
       :status="selectedStatus"
       :distance-m="distanceM"
+      :lot-address="lot?.address ?? null"
       @close="selectedSlot = null"
     />
   </NuxtLayout>

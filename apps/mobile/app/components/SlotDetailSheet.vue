@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { ParkingSlotEl, SlotStatus } from "@smart-parking/types";
 import { STATUS_COLORS, SLOT_COLORS } from "@smart-parking/types";
-import { X } from "lucide-vue-next";
+import { X, Navigation } from "lucide-vue-next";
 
 const props = defineProps<{
   slot: ParkingSlotEl | null;
   status: SlotStatus | null;
-  /** Approximate walking distance in metres, if known */
   distanceM?: number | null;
+  lotAddress?: string | null;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
@@ -39,6 +39,11 @@ const statusColor = computed(() =>
 const categoryColor = computed(() =>
   props.slot ? (SLOT_COLORS[props.slot.category] ?? "#6366f1") : "#6366f1",
 );
+
+const directionsUrl = computed(() => {
+  if (!props.lotAddress) return null;
+  return `https://maps.google.com/?q=${encodeURIComponent(props.lotAddress)}`;
+});
 </script>
 
 <template>
@@ -56,6 +61,7 @@ const categoryColor = computed(() =>
     <div
       v-if="isOpen && slot"
       class="fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl border-t bg-background shadow-xl"
+      style="padding-bottom: env(safe-area-inset-bottom)"
     >
       <!-- Handle -->
       <div class="flex justify-center pt-3 pb-1">
@@ -65,7 +71,6 @@ const categoryColor = computed(() =>
       <!-- Header -->
       <div class="flex items-start justify-between px-5 pt-2 pb-4">
         <div class="flex items-center gap-3">
-          <!-- Category color dot -->
           <div
             class="size-12 rounded-xl flex items-center justify-center text-white font-mono font-bold text-base shrink-0"
             :style="{ background: categoryColor }"
@@ -104,12 +109,10 @@ const categoryColor = computed(() =>
       </div>
 
       <!-- Details -->
-      <div class="px-5 pb-6 space-y-3">
+      <div class="px-5 pb-4 space-y-3">
         <div v-if="distanceM != null" class="flex justify-between text-sm">
           <span class="text-muted-foreground">Distance from entrance</span>
-          <span class=""
-            >~<span class="font-medium">{{ distanceM }} m</span></span
-          >
+          <span>~<span class="font-medium">{{ distanceM }} m</span></span>
         </div>
         <div class="flex justify-between text-sm">
           <span class="text-muted-foreground">Type</span>
@@ -119,15 +122,28 @@ const categoryColor = computed(() =>
         </div>
         <div class="flex justify-between text-sm">
           <span class="text-muted-foreground">Dimensions</span>
-          <span class="font-medium tabular-nums"
-            >{{ Math.round(slot.width / 100) / 10 }} ×
-            {{ Math.round(slot.height / 100) / 10 }} m</span
-          >
+          <span class="font-medium tabular-nums">
+            {{ Math.round(slot.width / 100) / 10 }} ×
+            {{ Math.round(slot.height / 100) / 10 }} m
+          </span>
         </div>
         <div v-if="slot.zoneId" class="flex justify-between text-sm">
           <span class="text-muted-foreground">Zone</span>
           <span class="font-medium">{{ slot.zoneId }}</span>
         </div>
+      </div>
+
+      <!-- Get directions CTA (only when slot is available) -->
+      <div v-if="status === 'free' && directionsUrl" class="px-5 pb-5">
+        <a
+          :href="directionsUrl"
+          target="_blank"
+          rel="noopener"
+          class="flex items-center justify-center gap-2 w-full h-11 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-white text-sm font-semibold transition-colors"
+        >
+          <Navigation class="size-4" />
+          Get directions to lot
+        </a>
       </div>
     </div>
   </Transition>

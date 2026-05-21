@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Search, LocateFixed, Loader2, X } from "lucide-vue-next";
+import { Search, LocateFixed, Loader2, X, Car, List, Map as MapIcon } from "lucide-vue-next";
 
 interface LotSummary {
   lot_id: string;
@@ -10,6 +10,7 @@ interface LotSummary {
   occupied_slots: number;
   other_slots: number;
   distance_meters?: number;
+  location: { type: "Point"; coordinates: [number, number] } | null;
 }
 
 const client = useSupabaseClient();
@@ -17,10 +18,13 @@ const { geocode } = useNominatim();
 
 const searchQuery = ref("");
 const mode = ref<"all" | "nearby">("all");
+const view = ref<"list" | "map">("list");
 const lots = ref<LotSummary[]>([]);
 const loading = ref(true);
 const gpsLoading = ref(false);
 const errorMsg = ref<string | null>(null);
+const userLat = ref<number | null>(null);
+const userLng = ref<number | null>(null);
 
 async function fetchAll() {
   loading.value = true;
@@ -66,6 +70,8 @@ async function onSearch() {
     errorMsg.value = "Location not found. Try a different search.";
     return;
   }
+  userLat.value = coords.lat;
+  userLng.value = coords.lng;
   mode.value = "nearby";
   await fetchNearby(coords.lat, coords.lng);
 }
@@ -80,6 +86,8 @@ function onGPS() {
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
       gpsLoading.value = false;
+      userLat.value = pos.coords.latitude;
+      userLng.value = pos.coords.longitude;
       mode.value = "nearby";
       searchQuery.value = "";
       await fetchNearby(pos.coords.latitude, pos.coords.longitude);
@@ -96,8 +104,22 @@ function onGPS() {
 function onClear() {
   searchQuery.value = "";
   mode.value = "all";
+  userLat.value = null;
+  userLng.value = null;
   fetchAll();
 }
+
+const lotsWithLocation = computed(() =>
+  lots.value.filter((l) => l.location?.coordinates),
+);
+
+const resultLabel = computed(() => {
+  if (loading.value) return null;
+  const n = lots.value.length;
+  if (mode.value === "nearby")
+    return `${n} lot${n !== 1 ? "s" : ""} within 5 km`;
+  return `${n} parking lot${n !== 1 ? "s" : ""}`;
+});
 
 await fetchAll();
 </script>
@@ -107,7 +129,7 @@ await fetchAll();
     <template #title>Smart Parking</template>
 
     <!-- Search bar -->
-    <div class="flex gap-2 mb-4">
+    <div class="flex gap-2 mb-3">
       <div class="relative flex-1">
         <Search
           class="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none"
@@ -116,13 +138,13 @@ await fetchAll();
           v-model="searchQuery"
           type="search"
           placeholder="Search city or area..."
-          class="w-full h-10 pl-9 pr-3 rounded-lg border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          class="w-full h-11 pl-9 pr-3 rounded-xl border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           @keyup.enter="onSearch"
         />
       </div>
       <button
         :disabled="gpsLoading"
-        class="size-10 shrink-0 flex items-center justify-center rounded-lg border border-input bg-background hover:bg-accent transition-colors disabled:opacity-50"
+        class="size-11 shrink-0 flex items-center justify-center rounded-xl border border-input bg-background hover:bg-accent transition-colors disabled:opacity-50"
         aria-label="Use my location"
         @click="onGPS"
       >
@@ -132,51 +154,146 @@ await fetchAll();
         />
         <LocateFixed v-else class="size-4 text-muted-foreground" />
       </button>
-      <button
-        v-if="mode === 'nearby'"
-        class="size-10 shrink-0 flex items-center justify-center rounded-lg border border-input bg-background hover:bg-accent transition-colors"
-        aria-label="Clear search"
-        @click="onClear"
-      >
-        <X class="size-4 text-muted-foreground" />
-      </button>
     </div>
 
-    <!-- Context label -->
-    <p class="text-xs text-muted-foreground mb-3">
-      <template v-if="mode === 'nearby'">Parking lots within 5 km</template>
-      <template v-else>All parking lots</template>
-    </p>
+    <!-- Mode tabs + view toggle -->
+    <div class="flex gap-2 mb-4">
+      <div class="flex gap-2 flex-1">
+        <button
+          class="flex-1 h-9 rounded-lg text-sm font-medium transition-colors"
+          :class="
+            mode === 'all'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted text-muted-foreground hover:text-foreground'
+          "
+          @click="onClear"
+        >
+          All lots
+        </button>
+        <button
+          class="flex-1 h-9 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5"
+          :class="
+            mode === 'nearby'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted text-muted-foreground hover:text-foreground'
+          "
+          :disabled="gpsLoading"
+          @click="mode !== 'nearby' && onGPS()"
+        >
+          <Loader2 v-if="gpsLoading" class="size-3.5 animate-spin" />
+          <LocateFixed v-else class="size-3.5" />
+          Nearby
+        </button>
+      </div>
+
+      <!-- List / Map toggle -->
+      <div class="flex rounded-lg border border-border overflow-hidden shrink-0">
+        <button
+          class="size-9 flex items-center justify-center transition-colors"
+          :class="
+            view === 'list'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-background text-muted-foreground hover:bg-muted'
+          "
+          aria-label="List view"
+          @click="view = 'list'"
+        >
+          <List class="size-4" />
+        </button>
+        <button
+          class="size-9 flex items-center justify-center border-l border-border transition-colors"
+          :class="
+            view === 'map'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-background text-muted-foreground hover:bg-muted'
+          "
+          aria-label="Map view"
+          @click="view = 'map'"
+        >
+          <MapIcon class="size-4" />
+        </button>
+      </div>
+    </div>
 
     <!-- Error -->
-    <p v-if="errorMsg" class="text-sm text-destructive mb-3">{{ errorMsg }}</p>
-
-    <!-- Skeleton loading state -->
-    <div v-if="loading" class="flex flex-col gap-3">
-      <Skeleton v-for="n in 4" :key="n" class="h-25 w-full rounded-xl" />
+    <div
+      v-if="errorMsg"
+      class="rounded-xl bg-destructive/10 border border-destructive/20 px-3.5 py-2.5 mb-3"
+    >
+      <p class="text-sm text-destructive">{{ errorMsg }}</p>
     </div>
 
-    <!-- Lot list -->
-    <div v-else-if="lots.length" class="flex flex-col gap-3">
-      <LotCard
-        v-for="lot in lots"
-        :key="lot.lot_id"
-        :lot-id="lot.lot_id"
-        :name="lot.name"
-        :address="lot.address"
-        :total-slots="Number(lot.total_slots)"
-        :free-slots="Number(lot.free_slots)"
-        :distance-meters="lot.distance_meters"
+    <!-- ── Map view ──────────────────────────────────────────────────────── -->
+    <template v-if="view === 'map'">
+      <div v-if="loading" class="rounded-xl border border-border bg-muted animate-pulse"
+        style="height: calc(100dvh - 220px); min-height: 320px"
       />
-    </div>
+      <div v-else-if="!lotsWithLocation.length" class="text-center py-16 text-muted-foreground">
+        <MapIcon class="size-10 mx-auto mb-3 opacity-25" />
+        <p class="text-sm font-medium">No lots with location data</p>
+        <p class="text-xs mt-1 opacity-70">Lot coordinates haven't been set yet.</p>
+      </div>
+      <ClientOnly v-else>
+        <LotMapView
+          :lots="lotsWithLocation"
+          :user-lat="userLat"
+          :user-lng="userLng"
+        />
+        <template #fallback>
+          <div
+            class="rounded-xl border border-border bg-muted animate-pulse"
+            style="height: calc(100dvh - 220px); min-height: 320px"
+          />
+        </template>
+      </ClientOnly>
+    </template>
 
-    <!-- Empty state -->
-    <div v-else class="text-center py-20 text-muted-foreground">
-      <LocateFixed class="size-8 mx-auto mb-3 opacity-30" />
-      <p class="text-sm">No parking lots found.</p>
-      <p v-if="mode === 'nearby'" class="text-xs mt-1">
-        Try expanding your search area.
-      </p>
-    </div>
+    <!-- ── List view ─────────────────────────────────────────────────────── -->
+    <template v-else>
+      <!-- Result count + clear -->
+      <div class="flex items-center justify-between mb-3">
+        <p v-if="resultLabel" class="text-xs text-muted-foreground">
+          {{ resultLabel }}
+        </p>
+        <button
+          v-if="mode === 'nearby'"
+          class="text-xs text-muted-foreground flex items-center gap-1 hover:text-foreground ml-auto transition-colors"
+          @click="onClear"
+        >
+          <X class="size-3" /> Clear
+        </button>
+      </div>
+
+      <!-- Skeletons -->
+      <div v-if="loading" class="flex flex-col gap-3">
+        <Skeleton v-for="n in 4" :key="n" class="h-24 w-full rounded-xl" />
+      </div>
+
+      <!-- Lot cards -->
+      <div v-else-if="lots.length" class="flex flex-col gap-3">
+        <LotCard
+          v-for="lot in lots"
+          :key="lot.lot_id"
+          :lot-id="lot.lot_id"
+          :name="lot.name"
+          :address="lot.address"
+          :total-slots="Number(lot.total_slots)"
+          :free-slots="Number(lot.free_slots)"
+          :distance-meters="lot.distance_meters"
+        />
+      </div>
+
+      <!-- Empty state -->
+      <div v-else class="text-center py-16 text-muted-foreground">
+        <Car class="size-10 mx-auto mb-3 opacity-25" />
+        <p class="text-sm font-medium">No parking lots found</p>
+        <p v-if="mode === 'nearby'" class="text-xs mt-1 opacity-70">
+          Try expanding your search area or switch to all lots.
+        </p>
+        <p v-else class="text-xs mt-1 opacity-70">
+          No lots have been added yet.
+        </p>
+      </div>
+    </template>
   </NuxtLayout>
 </template>
