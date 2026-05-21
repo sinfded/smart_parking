@@ -44,6 +44,35 @@ const lotForm = reactive({
   lng: "" as string,
 });
 
+// PostgREST returns PostGIS geography as hex-encoded EWKB, not GeoJSON.
+// Format: [1B endian][4B type (incl. SRID flag 0x20000000)][4B SRID?][8B lng][8B lat]
+function decodeEWKBPoint(hex: string): { lat: number; lng: number } | null {
+  try {
+    if (hex.length < 42) return null;
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++)
+      bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    const view = new DataView(bytes.buffer);
+    const le = bytes[0] === 1;
+    const wkbType = view.getUint32(1, le);
+    const hasSRID = !!(wkbType & 0x20000000);
+    const offset = 5 + (hasSRID ? 4 : 0);
+    if (bytes.length < offset + 16) return null;
+    return { lng: view.getFloat64(offset, le), lat: view.getFloat64(offset + 8, le) };
+  } catch {
+    return null;
+  }
+}
+
+function parseLotLocation(location: unknown): { lat: string; lng: string } | null {
+  if (!location) return null;
+  if (typeof location === "string") {
+    const coords = decodeEWKBPoint(location);
+    if (coords) return { lat: String(coords.lat), lng: String(coords.lng) };
+  }
+  return null;
+}
+
 watch(
   lot,
   (v) => {
@@ -52,12 +81,9 @@ watch(
     lotForm.address = v.address ?? "";
     lotForm.timezone = v.timezone;
     lotForm.is_public = v.is_public;
-    // location comes back from PostgREST as GeoJSON
-    const loc = v.location as { coordinates?: [number, number] } | null;
-    if (loc?.coordinates) {
-      lotForm.lng = String(loc.coordinates[0]);
-      lotForm.lat = String(loc.coordinates[1]);
-    }
+    const coords = parseLotLocation(v.location);
+    lotForm.lat = coords?.lat ?? "";
+    lotForm.lng = coords?.lng ?? "";
   },
   { immediate: true },
 );
@@ -81,9 +107,8 @@ async function saveLot() {
   savingLot.value = true;
   const lat = parseFloat(lotForm.lat);
   const lng = parseFloat(lotForm.lng);
-  const location = !isNaN(lat) && !isNaN(lng)
-    ? `POINT(${lng} ${lat})`   // PostGIS: longitude first
-    : null;
+  // PostGIS WKT: longitude first. null clears any existing location.
+  const location = !isNaN(lat) && !isNaN(lng) ? `POINT(${lng} ${lat})` : null;
   await client
     .from("lots")
     .update({
@@ -91,10 +116,14 @@ async function saveLot() {
       address: lotForm.address.trim() || null,
       timezone: lotForm.timezone.trim(),
       is_public: lotForm.is_public,
-      ...(location !== undefined && { location }),
+      location,
     })
     .eq("id", lotId);
   await refreshLot();
+  // Force-sync lat/lng in case the watch doesn't re-fire after a hydrated refresh
+  const coords = parseLotLocation(lot.value?.location);
+  lotForm.lat = coords?.lat ?? lotForm.lat;
+  lotForm.lng = coords?.lng ?? lotForm.lng;
   savingLot.value = false;
 }
 

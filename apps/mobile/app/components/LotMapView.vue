@@ -7,7 +7,8 @@ interface LotPin {
   address: string | null;
   total_slots: number;
   free_slots: number;
-  location: { type: "Point"; coordinates: [number, number] } | null;
+  lat: number | null;
+  lng: number | null;
 }
 
 const props = defineProps<{
@@ -125,8 +126,7 @@ function clearLotMarkers() {
 
 function renderLotMarkers(L: typeof import("leaflet").default) {
   for (const lot of props.lots) {
-    if (!lot.location?.coordinates) continue;
-    const [lng, lat] = lot.location.coordinates;
+    if (lot.lat == null || lot.lng == null) continue;
     const icon = L.divIcon({
       html: markerHtml(lot),
       className: "",
@@ -134,7 +134,7 @@ function renderLotMarkers(L: typeof import("leaflet").default) {
       iconAnchor: [21, 21],
       popupAnchor: [0, -26],
     });
-    const marker = L.marker([lat, lng], { icon })
+    const marker = L.marker([lot.lat, lot.lng], { icon })
       .bindPopup(popupHtml(lot), { maxWidth: 260 })
       .addTo(map!);
     lotMarkers.push(marker);
@@ -158,27 +158,21 @@ function renderUserMarker(L: typeof import("leaflet").default) {
 }
 
 function fitView(L: typeof import("leaflet").default) {
-  // If user location is known, center there
   if (props.userLat != null && props.userLng != null) {
     map!.setView([props.userLat, props.userLng], 15);
     return;
   }
-  const valid = props.lots.filter((l) => l.location?.coordinates);
+  const valid = props.lots.filter((l) => l.lat != null && l.lng != null);
   if (!valid.length) {
-    // Default to Metro Manila
     map!.setView([14.5995, 120.9842], 13);
     return;
   }
   if (valid.length === 1) {
-    const [lng, lat] = valid[0].location!.coordinates;
-    map!.setView([lat, lng], 15);
+    map!.setView([valid[0].lat!, valid[0].lng!], 15);
     return;
   }
   const bounds = L.latLngBounds(
-    valid.map((l) => [
-      l.location!.coordinates[1],
-      l.location!.coordinates[0],
-    ] as [number, number]),
+    valid.map((l) => [l.lat!, l.lng!] as [number, number]),
   );
   map!.fitBounds(bounds, { padding: [48, 48] });
 }

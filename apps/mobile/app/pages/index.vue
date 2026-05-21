@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { Search, LocateFixed, Loader2, X, Car, List, Map as MapIcon } from "lucide-vue-next";
+import {
+  Search,
+  LocateFixed,
+  Loader2,
+  X,
+  Car,
+  List,
+  Map as MapIcon,
+} from "lucide-vue-next";
 
 interface LotSummary {
   lot_id: string;
@@ -10,7 +18,8 @@ interface LotSummary {
   occupied_slots: number;
   other_slots: number;
   distance_meters?: number;
-  location: { type: "Point"; coordinates: [number, number] } | null;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 const client = useSupabaseClient();
@@ -43,11 +52,14 @@ async function fetchAll() {
 async function fetchNearby(lat: number, lng: number) {
   loading.value = true;
   errorMsg.value = null;
-  const { data, error } = await client.rpc("lots_nearby" as any, {
-    p_lat: lat,
-    p_lng: lng,
-    p_radius_meters: 5000,
-  } as any);
+  const { data, error } = await client.rpc(
+    "lots_nearby" as any,
+    {
+      p_lat: lat,
+      p_lng: lng,
+      p_radius_meters: 5000,
+    } as any,
+  );
   loading.value = false;
   if (error) {
     errorMsg.value = error.message;
@@ -110,7 +122,10 @@ function onClear() {
 }
 
 const lotsWithLocation = computed(() =>
-  lots.value.filter((l) => l.location?.coordinates),
+  lots.value.filter(
+    (l): l is typeof l & { lat: number; lng: number } =>
+      l.lat != null && l.lng != null,
+  ),
 );
 
 const resultLabel = computed(() => {
@@ -187,7 +202,9 @@ await fetchAll();
       </div>
 
       <!-- List / Map toggle -->
-      <div class="flex rounded-lg border border-border overflow-hidden shrink-0">
+      <div
+        class="flex rounded-lg border border-border overflow-hidden shrink-0"
+      >
         <button
           class="size-9 flex items-center justify-center transition-colors"
           :class="
@@ -225,13 +242,20 @@ await fetchAll();
 
     <!-- ── Map view ──────────────────────────────────────────────────────── -->
     <template v-if="view === 'map'">
-      <div v-if="loading" class="rounded-xl border border-border bg-muted animate-pulse"
+      <div
+        v-if="loading"
+        class="rounded-xl border border-border bg-muted animate-pulse"
         style="height: calc(100dvh - 220px); min-height: 320px"
       />
-      <div v-else-if="!lotsWithLocation.length" class="text-center py-16 text-muted-foreground">
+      <div
+        v-else-if="!lotsWithLocation.length"
+        class="text-center py-16 text-muted-foreground"
+      >
         <MapIcon class="size-10 mx-auto mb-3 opacity-25" />
         <p class="text-sm font-medium">No lots with location data</p>
-        <p class="text-xs mt-1 opacity-70">Lot coordinates haven't been set yet.</p>
+        <p class="text-xs mt-1 opacity-70">
+          Lot coordinates haven't been set yet.
+        </p>
       </div>
       <ClientOnly v-else>
         <LotMapView
