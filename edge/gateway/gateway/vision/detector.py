@@ -640,13 +640,14 @@ class HeadlessRunner:
                            else [None] * len(camera_urls)
         self.db_logger   = SupabaseLogger(db) if db and db.available else None
 
-        self.slot_rois:       list = [[] for _ in camera_urls]
-        self.slot_state:      dict = {}
-        self.slot_window:     dict = {}  # deque[bool] per slot — rolling detection window
-        self.slot_enter_time: dict = {}
-        self.slot_confidence: dict = {}  # latest per-frame confidence per slot
-        self.slot_ids:        dict = {}  # (cam_idx, slot_idx) → slots.id UUID
-        self.last_frame_ids:  list = [0] * len(camera_urls)
+        self.slot_rois:        list = [[] for _ in camera_urls]
+        self.slot_state:       dict = {}
+        self.slot_window:      dict = {}  # deque[bool] per slot — rolling detection window
+        self.slot_consec_free: dict = {}  # consecutive frames with zero hits per slot
+        self.slot_enter_time:  dict = {}
+        self.slot_confidence:  dict = {}  # latest per-frame confidence per slot
+        self.slot_ids:         dict = {}  # (cam_idx, slot_idx) → slots.id UUID
+        self.last_frame_ids:   list = [0] * len(camera_urls)
         self.running = True
 
         self._load_slots(slot_regions or [])
@@ -672,10 +673,11 @@ class HeadlessRunner:
                 self.slot_ids[(cam_idx, slot_idx)] = slot_id
                 key           = (cam_idx, slot_idx)
                 initial_state = db_state.get(slot_id, False)
-                self.slot_state[key]      = initial_state
-                self.slot_window[key]     = deque(maxlen=self.config.window_size)
-                self.slot_enter_time[key] = None
-                self.slot_confidence[key] = 0.0
+                self.slot_state[key]       = initial_state
+                self.slot_window[key]      = deque(maxlen=self.config.window_size)
+                self.slot_consec_free[key] = 0
+                self.slot_enter_time[key]  = None
+                self.slot_confidence[key]  = 0.0
                 self.state.update_slot(cam_idx, slot_idx, initial_state, None)
             self._log(f"Loaded {sum(len(p) for p in self.slot_rois)} slot(s) from Supabase")
             return
@@ -691,9 +693,10 @@ class HeadlessRunner:
             self.slot_rois[cam_idx] = polygons
             for slot_idx in range(len(polygons)):
                 key = (cam_idx, slot_idx)
-                self.slot_state[key]      = False
-                self.slot_window[key]     = deque(maxlen=self.config.window_size)
-                self.slot_enter_time[key] = None
+                self.slot_state[key]       = False
+                self.slot_window[key]      = deque(maxlen=self.config.window_size)
+                self.slot_consec_free[key] = 0
+                self.slot_enter_time[key]  = None
                 self.state.update_slot(cam_idx, slot_idx, False, None)
         self._log(f"Loaded {sum(len(p) for p in loaded)} slot(s) from {SLOT_FILE}")
 
@@ -713,12 +716,13 @@ class HeadlessRunner:
             s["id"]: s["current_state"] == "occupied"
             for s in self.db.list_slots(self.lot_id)
         }
-        self.slot_rois       = [[] for _ in self.streams]
-        self.slot_state      = {}
-        self.slot_window     = {}
-        self.slot_enter_time = {}
-        self.slot_confidence = {}
-        self.slot_ids        = {}
+        self.slot_rois        = [[] for _ in self.streams]
+        self.slot_state       = {}
+        self.slot_window      = {}
+        self.slot_consec_free = {}
+        self.slot_enter_time  = {}
+        self.slot_confidence  = {}
+        self.slot_ids         = {}
         if new_regions:
             cam_id_to_idx = {cid: i for i, cid in enumerate(self.camera_ids) if cid}
             for region in new_regions:
@@ -732,10 +736,11 @@ class HeadlessRunner:
                 self.slot_ids[(cam_idx, slot_idx)] = slot_id
                 key           = (cam_idx, slot_idx)
                 initial_state = db_state.get(slot_id, False)
-                self.slot_state[key]      = initial_state
-                self.slot_window[key]     = deque(maxlen=self.config.window_size)
-                self.slot_enter_time[key] = None
-                self.slot_confidence[key] = 0.0
+                self.slot_state[key]       = initial_state
+                self.slot_window[key]      = deque(maxlen=self.config.window_size)
+                self.slot_consec_free[key] = 0
+                self.slot_enter_time[key]  = None
+                self.slot_confidence[key]  = 0.0
                 self.state.update_slot(cam_idx, slot_idx, initial_state, None)
         total = sum(len(r) for r in self.slot_rois)
         self._log(f"Regions reloaded — {total} slot(s) active")
@@ -833,13 +838,22 @@ class HeadlessRunner:
                 detected = len(hits) > 0
                 self.slot_confidence[key] = max((b[4] for b in hits), default=0.0)
 
+                if detected:
+                    self.slot_consec_free[key] = 0
+                else:
+                    self.slot_consec_free[key] = self.slot_consec_free.get(key, 0) + 1
+
                 win = self.slot_window[key]
                 win.append(detected)
                 true_votes  = sum(win)
                 false_votes = len(win) - true_votes
 
                 currently = self.slot_state[key]
-                if not currently and true_votes >= debounce_enter:
+                # Fast-clear: N consecutive frames with zero hits overrides the vote window.
+                # This fixes "slot stuck occupied while no detection box covers it."
+                if currently and self.slot_consec_free[key] >= debounce_free:
+                    stable = False
+                elif not currently and true_votes >= debounce_enter:
                     stable = True
                 elif currently and false_votes >= debounce_free:
                     stable = False
