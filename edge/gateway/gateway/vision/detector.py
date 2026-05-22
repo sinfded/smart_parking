@@ -40,7 +40,7 @@ INFER_H         = 450
 # =========================================================
 @dataclasses.dataclass
 class AppConfig:
-    confidence:           float = 0.35
+    confidence:           float = 0.50
     debounce_frames:      int   = 4    # votes needed in window to confirm occupied
     debounce_frames_free: int   = 6    # "free" votes needed in window to confirm free
     window_size:          int   = 8    # rolling window length for both transitions
@@ -713,8 +713,10 @@ class HeadlessRunner:
     @staticmethod
     def _box_poly_overlap_ratio(pts: np.ndarray,
                                  x1: int, y1: int, x2: int, y2: int) -> float:
-        """Fraction of the bounding box area that overlaps the slot polygon."""
-        box_area = max((x2 - x1) * (y2 - y1), 1)
+        """Fraction of the slot polygon area covered by the bounding box."""
+        poly_area = cv2.contourArea(pts)
+        if poly_area < 1:
+            return 0.0
         px_min, py_min = int(pts[:, 0].min()), int(pts[:, 1].min())
         px_max, py_max = int(pts[:, 0].max()), int(pts[:, 1].max())
         ix1 = max(x1, px_min)
@@ -727,7 +729,7 @@ class HeadlessRunner:
         mask = np.zeros((h, w), dtype=np.uint8)
         shifted = (pts - np.array([ix1, iy1])).astype(np.int32)
         cv2.fillPoly(mask, [shifted], 1)
-        return int(mask.sum()) / box_area
+        return int(mask.sum()) / poly_area
 
     def _annotate(self, cam_idx: int, display, boxes):
         for bx1, by1, bx2, by2, conf in boxes:
