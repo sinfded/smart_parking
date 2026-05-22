@@ -46,6 +46,7 @@ class AppConfig:
     window_size:          int   = 8    # rolling window length for both transitions
     overlap_threshold:    float = 0.40 # min box/polygon overlap ratio to count as a hit
     min_duration:         int   = 5
+    clahe_clip_limit:     float = 2.0  # CLAHE clip limit; raise for heavy shadow, 0.0 to disable
     api_host:             str   = "0.0.0.0"
     api_port:             int   = 8000
 
@@ -230,12 +231,13 @@ class SupabaseClient:
             return None
         r = rows[0]
         return AppConfig(
-            confidence=float(r.get("confidence", 0.35)),
+            confidence=float(r.get("confidence", 0.50)),
             debounce_frames=int(r.get("debounce_frames", 4)),
             debounce_frames_free=int(r.get("debounce_frames_free", 6)),
             window_size=int(r.get("window_size", 8)),
             overlap_threshold=float(r.get("overlap_threshold", 0.40)),
             min_duration=int(r.get("min_duration", 5)),
+            clahe_clip_limit=float(r.get("clahe_clip_limit", 2.0)),
             api_host=r.get("api_host", "0.0.0.0"),
             api_port=int(r.get("api_port", 8000)),
         )
@@ -531,7 +533,17 @@ class InferenceWorker(threading.Thread):
         self._frame_ids = [0] * len(streams)
         self._lock      = threading.Lock()
         self.running    = True
+        clip = config.clahe_clip_limit
+        self._clahe     = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8)) if clip > 0 else None
         self.start()
+
+    def _enhance(self, frame: np.ndarray) -> np.ndarray:
+        if self._clahe is None:
+            return frame
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l = self._clahe.apply(l)
+        return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
 
     def run(self):
         while self.running:
@@ -541,9 +553,10 @@ class InferenceWorker(threading.Thread):
                 if frame is None:
                     continue
                 processed_any = True
-                resized = cv2.resize(frame, (INFER_W, INFER_H))
-                preds   = self.model.predict(resized, conf=self.config.confidence,
-                                             classes=VEHICLE_CLASSES, verbose=False)
+                resized  = cv2.resize(frame, (INFER_W, INFER_H))
+                enhanced = self._enhance(resized)
+                preds    = self.model.predict(enhanced, conf=self.config.confidence,
+                                              classes=VEHICLE_CLASSES, verbose=False)
                 boxes = [
                     (int(x1), int(y1), int(x2), int(y2), float(conf))
                     for r in preds
@@ -552,7 +565,7 @@ class InferenceWorker(threading.Thread):
                     )
                 ]
                 with self._lock:
-                    self._frames[cam_idx]    = resized
+                    self._frames[cam_idx]    = resized   # natural image for display
                     self._boxes[cam_idx]     = boxes
                     self._frame_ids[cam_idx] += 1
             if not processed_any:

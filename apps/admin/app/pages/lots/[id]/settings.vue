@@ -129,9 +129,12 @@ async function saveLot() {
 
 // ── Gateway settings form ─────────────────────────────────────────────────────
 const gwForm = reactive({
-  confidence: 0.35,
-  debounce_frames: 3,
-  debounce_frames_free: 10,
+  confidence: 0.50,
+  debounce_frames: 4,
+  debounce_frames_free: 6,
+  window_size: 8,
+  overlap_threshold: 0.40,
+  clahe_clip_limit: 2.0,
   min_duration: 5,
   api_host: "0.0.0.0",
   api_port: 8000,
@@ -144,6 +147,9 @@ watch(
     gwForm.confidence = v.confidence;
     gwForm.debounce_frames = v.debounce_frames;
     gwForm.debounce_frames_free = v.debounce_frames_free;
+    gwForm.window_size = v.window_size;
+    gwForm.overlap_threshold = v.overlap_threshold;
+    gwForm.clahe_clip_limit = v.clahe_clip_limit;
     gwForm.min_duration = v.min_duration;
     gwForm.api_host = v.api_host;
     gwForm.api_port = v.api_port;
@@ -160,6 +166,9 @@ async function saveGateway() {
       confidence: gwForm.confidence,
       debounce_frames: gwForm.debounce_frames,
       debounce_frames_free: gwForm.debounce_frames_free,
+      window_size: gwForm.window_size,
+      overlap_threshold: gwForm.overlap_threshold,
+      clahe_clip_limit: gwForm.clahe_clip_limit,
       min_duration: gwForm.min_duration,
       api_host: gwForm.api_host.trim(),
       api_port: gwForm.api_port,
@@ -297,6 +306,20 @@ async function saveGateway() {
               </p>
             </div>
             <div class="space-y-2">
+              <Label for="gw-overlap">Overlap threshold</Label>
+              <Input
+                id="gw-overlap"
+                v-model.number="gwForm.overlap_threshold"
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+              />
+              <p class="text-muted-foreground text-xs">
+                Min slot coverage to count as a hit (0–1)
+              </p>
+            </div>
+            <div class="space-y-2">
               <Label for="gw-debounce">Debounce (occupied)</Label>
               <Input
                 id="gw-debounce"
@@ -318,6 +341,32 @@ async function saveGateway() {
               />
               <p class="text-muted-foreground text-xs">
                 Frames to confirm a slot is empty
+              </p>
+            </div>
+            <div class="space-y-2">
+              <Label for="gw-window">Vote window</Label>
+              <Input
+                id="gw-window"
+                v-model.number="gwForm.window_size"
+                type="number"
+                min="1"
+              />
+              <p class="text-muted-foreground text-xs">
+                Rolling frame window for vote counts
+              </p>
+            </div>
+            <div class="space-y-2">
+              <Label for="gw-clahe">Shadow correction</Label>
+              <Input
+                id="gw-clahe"
+                v-model.number="gwForm.clahe_clip_limit"
+                type="number"
+                step="0.1"
+                min="0"
+                max="10"
+              />
+              <p class="text-muted-foreground text-xs">
+                CLAHE clip limit (0 = off, raise for heavy shadow)
               </p>
             </div>
             <div class="space-y-2">
