@@ -118,7 +118,9 @@ function openOnMap() {
       <div class="px-5 pb-4 space-y-3">
         <div v-if="distanceM != null" class="flex justify-between text-sm">
           <span class="text-muted-foreground">Distance from entrance</span>
-          <span>~<span class="font-medium">{{ distanceM }} m</span></span>
+          <span
+            >~<span class="font-medium">{{ distanceM }} m</span></span
+          >
         </div>
         <div class="flex justify-between text-sm">
           <span class="text-muted-foreground">Type</span>
@@ -129,8 +131,8 @@ function openOnMap() {
         <div class="flex justify-between text-sm">
           <span class="text-muted-foreground">Dimensions</span>
           <span class="font-medium tabular-nums">
-            {{ Math.round(slot.width / 100) / 10 }} ×
-            {{ Math.round(slot.height / 100) / 10 }} m
+            {{ Math.round(slot.width / 100) }} ×
+            {{ Math.round(slot.height / 100) }} m
           </span>
         </div>
         <div v-if="slot.zoneId" class="flex justify-between text-sm">
