@@ -1,5 +1,6 @@
 """Calls the report_slot_state RPC and manages the gateway's Supabase auth session."""
 
+import asyncio
 import structlog
 from supabase import AsyncClient, acreate_client
 
@@ -7,13 +8,15 @@ from .config import Settings
 
 log = structlog.get_logger()
 
+_REFRESH_INTERVAL = 55 * 60  # refresh 5 minutes before the 1-hour JWT expiry
+
 
 class SupabaseWriter:
     def __init__(self, settings: Settings) -> None:
         self._s:      Settings     = settings
         self._client: AsyncClient | None = None
-        # slot_label → slot UUID cache so we don't query on every reading
         self._slot_cache: dict[str, str] = {}
+        self._refresh_task: asyncio.Task | None = None
 
     async def authenticate(self) -> None:
         self._client = await acreate_client(self._s.supabase_url, self._s.supabase_key)
@@ -22,6 +25,26 @@ class SupabaseWriter:
             "password": self._s.gateway_password,
         })
         log.info("supabase.authenticated", lot_id=self._s.lot_id)
+        if self._refresh_task is None or self._refresh_task.done():
+            self._refresh_task = asyncio.create_task(self._refresh_loop())
+
+    async def _refresh_loop(self) -> None:
+        while True:
+            await asyncio.sleep(_REFRESH_INTERVAL)
+            assert self._client
+            try:
+                await self._client.auth.refresh_session()
+                log.info("supabase.session_refreshed")
+            except Exception as exc:
+                log.warning("supabase.refresh_failed", error=str(exc))
+                try:
+                    await self._client.auth.sign_in_with_password({
+                        "email":    self._s.gateway_email,
+                        "password": self._s.gateway_password,
+                    })
+                    log.info("supabase.reauthenticated")
+                except Exception as exc2:
+                    log.error("supabase.reauth_failed", error=str(exc2))
 
     async def _resolve_slot(self, slot_label: str) -> str | None:
         """Return the UUID for a slot label, with a simple in-process cache."""

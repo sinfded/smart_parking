@@ -42,9 +42,9 @@ INFER_H         = 450
 class AppConfig:
     confidence:           float = 0.50
     debounce_frames:      int   = 4    # votes needed in window to confirm occupied
-    debounce_frames_free: int   = 6    # "free" votes needed in window to confirm free
+    debounce_frames_free: int   = 4    # "free" votes needed in window to confirm free
     window_size:          int   = 8    # rolling window length for both transitions
-    overlap_threshold:    float = 0.40 # min box/polygon overlap ratio to count as a hit
+    overlap_threshold:    float = 0.55 # min fraction of slot polygon covered to count as a hit
     min_duration:         int   = 5
     clahe_clip_limit:     float = 2.0  # CLAHE clip limit; raise for heavy shadow, 0.0 to disable
     api_host:             str   = "0.0.0.0"
@@ -116,22 +116,40 @@ class SupabaseClient:
     """
 
     def __init__(self, email: str | None = None, password: str | None = None):
-        url      = os.environ.get("SUPABASE_URL", "").strip()
-        key      = os.environ.get("SUPABASE_KEY", "").strip()
-        email    = email or os.environ.get("GATEWAY_EMAIL", "").strip()
-        password = password or os.environ.get("GATEWAY_PASSWORD", "").strip()
-        self._c  = None
+        url           = os.environ.get("SUPABASE_URL", "").strip()
+        key           = os.environ.get("SUPABASE_KEY", "").strip()
+        self._email    = email or os.environ.get("GATEWAY_EMAIL", "").strip()
+        self._password = password or os.environ.get("GATEWAY_PASSWORD", "").strip()
+        self._c       = None
         if url and key:
             try:
                 from supabase import create_client
                 self._c = create_client(url, key)
-                if email and password:
-                    self._c.auth.sign_in_with_password({"email": email, "password": password})
+                if self._email and self._password:
+                    self._c.auth.sign_in_with_password(
+                        {"email": self._email, "password": self._password}
+                    )
                     print("[Supabase] Authenticated as gateway user", flush=True)
             except ImportError:
                 print("[Supabase] supabase-py not installed — run: pip install supabase", flush=True)
             except Exception as e:
                 print(f"[Supabase] Connection failed: {e}", flush=True)
+
+    def reauthenticate(self) -> None:
+        if not self._c:
+            return
+        try:
+            self._c.auth.refresh_session()
+            print("[Supabase] Session refreshed", flush=True)
+        except Exception:
+            if self._email and self._password:
+                try:
+                    self._c.auth.sign_in_with_password(
+                        {"email": self._email, "password": self._password}
+                    )
+                    print("[Supabase] Re-authenticated", flush=True)
+                except Exception as e:
+                    print(f"[Supabase] Re-auth failed: {e}", flush=True)
 
     @property
     def available(self) -> bool:
@@ -233,9 +251,9 @@ class SupabaseClient:
         return AppConfig(
             confidence=float(r.get("confidence", 0.50)),
             debounce_frames=int(r.get("debounce_frames", 4)),
-            debounce_frames_free=int(r.get("debounce_frames_free", 6)),
+            debounce_frames_free=int(r.get("debounce_frames_free", 4)),
             window_size=int(r.get("window_size", 8)),
-            overlap_threshold=float(r.get("overlap_threshold", 0.40)),
+            overlap_threshold=float(r.get("overlap_threshold", 0.55)),
             min_duration=int(r.get("min_duration", 5)),
             clahe_clip_limit=float(r.get("clahe_clip_limit", 2.0)),
             api_host=r.get("api_host", "0.0.0.0"),
@@ -282,7 +300,16 @@ class SupabaseLogger:
             try:
                 self._db.report_slot_state(slot_id, new_state, confidence, metadata)
             except Exception as e:
-                print(f"[SupabaseLogger] {e}", flush=True)
+                err = str(e).lower()
+                if "jwt" in err or "expired" in err or "401" in err or "invalid claim" in err:
+                    print("[SupabaseLogger] JWT expired — refreshing session", flush=True)
+                    self._db.reauthenticate()
+                    try:
+                        self._db.report_slot_state(slot_id, new_state, confidence, metadata)
+                    except Exception as e2:
+                        print(f"[SupabaseLogger] Retry failed: {e2}", flush=True)
+                else:
+                    print(f"[SupabaseLogger] {e}", flush=True)
 
 
 # =========================================================
@@ -795,8 +822,13 @@ class HeadlessRunner:
                     continue
                 hits = [
                     b for b in boxes
-                    if self._box_poly_overlap_ratio(pts, b[0], b[1], b[2], b[3])
-                    >= overlap_threshold
+                    if (
+                        self._box_poly_overlap_ratio(pts, b[0], b[1], b[2], b[3])
+                        >= overlap_threshold
+                        and cv2.pointPolygonTest(
+                            pts, ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2), True
+                        ) >= -20
+                    )
                 ]
                 detected = len(hits) > 0
                 self.slot_confidence[key] = max((b[4] for b in hits), default=0.0)
