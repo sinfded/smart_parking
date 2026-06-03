@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
 import os
@@ -8,6 +9,14 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 app = FastAPI(title="Smart Parking Forecasting API", version="1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Resolve path to the pickle file
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
