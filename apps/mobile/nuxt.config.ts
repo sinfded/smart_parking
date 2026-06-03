@@ -40,4 +40,9 @@ export default defineNuxtConfig({
       type: "module",
     },
   },
+  runtimeConfig: {
+    public: {
+      forecastUrl: "",
+    },
+  },
 });

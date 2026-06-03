@@ -8,6 +8,7 @@ import dataclasses
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 import json
 import os
 import queue
@@ -49,15 +50,52 @@ class AppConfig:
     clahe_clip_limit:     float = 2.0  # CLAHE clip limit; raise for heavy shadow, 0.0 to disable
     api_host:             str   = "0.0.0.0"
     api_port:             int   = 8000
+    inference_interval:   float = 1.0
+    fast_clear_frames:    int   = 2
+    use_contact_point:    bool  = True
+    use_dynamic_overlap:  bool  = True
+    roi_crop:             bool  = True
 
 
 def load_config() -> AppConfig:
+    cfg = AppConfig()
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE) as f:
             data = json.load(f)
-        valid = {k: v for k, v in data.items() if k in AppConfig.__dataclass_fields__}
-        return AppConfig(**valid)
-    return AppConfig()
+        for k, v in data.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
+
+    def get_env_float(name, default):
+        val = os.environ.get(name)
+        return float(val) if val is not None else default
+
+    def get_env_int(name, default):
+        val = os.environ.get(name)
+        return int(val) if val is not None else default
+
+    def get_env_bool(name, default):
+        val = os.environ.get(name)
+        if val is None:
+            return default
+        return val.lower() in ("true", "1", "yes")
+
+    cfg.confidence = get_env_float("CAMERA_CONFIDENCE", cfg.confidence)
+    cfg.debounce_frames = get_env_int("CAMERA_DEBOUNCE_FRAMES", cfg.debounce_frames)
+    cfg.debounce_frames_free = get_env_int("CAMERA_DEBOUNCE_FRAMES_FREE", cfg.debounce_frames_free)
+    cfg.window_size = get_env_int("WINDOW_SIZE", cfg.window_size)
+    cfg.overlap_threshold = get_env_float("OVERLAP_THRESHOLD", cfg.overlap_threshold)
+    cfg.min_duration = get_env_int("CAMERA_MIN_DURATION", cfg.min_duration)
+    cfg.clahe_clip_limit = get_env_float("CLAHE_CLIP_LIMIT", cfg.clahe_clip_limit)
+    cfg.api_host = os.environ.get("API_HOST", cfg.api_host)
+    cfg.api_port = get_env_int("API_PORT", cfg.api_port)
+    cfg.inference_interval = get_env_float("CAMERA_INFERENCE_INTERVAL", cfg.inference_interval)
+    cfg.fast_clear_frames = get_env_int("CAMERA_FAST_CLEAR_FRAMES", cfg.fast_clear_frames)
+    cfg.use_contact_point = get_env_bool("CAMERA_USE_CONTACT_POINT", cfg.use_contact_point)
+    cfg.use_dynamic_overlap = get_env_bool("CAMERA_USE_DYNAMIC_OVERLAP", cfg.use_dynamic_overlap)
+    cfg.roi_crop = get_env_bool("CAMERA_ROI_CROP", cfg.roi_crop)
+
+    return cfg
 
 
 # =========================================================
@@ -248,16 +286,40 @@ class SupabaseClient:
         if not rows:
             return None
         r = rows[0]
+
+        def safe_float(key, default):
+            v = r.get(key)
+            return float(v) if v is not None else default
+
+        def safe_int(key, default):
+            v = r.get(key)
+            return int(v) if v is not None else default
+
+        def safe_bool(key, default):
+            v = r.get(key)
+            if v is None:
+                return default
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, str):
+                return v.lower() in ("true", "1", "yes")
+            return bool(v)
+
         return AppConfig(
-            confidence=float(r.get("confidence", 0.50)),
-            debounce_frames=int(r.get("debounce_frames", 4)),
-            debounce_frames_free=int(r.get("debounce_frames_free", 4)),
-            window_size=int(r.get("window_size", 8)),
-            overlap_threshold=float(r.get("overlap_threshold", 0.55)),
-            min_duration=int(r.get("min_duration", 5)),
-            clahe_clip_limit=float(r.get("clahe_clip_limit", 2.0)),
-            api_host=r.get("api_host", "0.0.0.0"),
-            api_port=int(r.get("api_port", 8000)),
+            confidence=safe_float("confidence", 0.50),
+            debounce_frames=safe_int("debounce_frames", 4),
+            debounce_frames_free=safe_int("debounce_frames_free", 4),
+            window_size=safe_int("window_size", 8),
+            overlap_threshold=safe_float("overlap_threshold", 0.55),
+            min_duration=safe_int("min_duration", 5),
+            clahe_clip_limit=safe_float("clahe_clip_limit", 2.0),
+            api_host=r.get("api_host") or "0.0.0.0",
+            api_port=safe_int("api_port", 8000),
+            inference_interval=safe_float("inference_interval", 1.0),
+            fast_clear_frames=safe_int("fast_clear_frames", 2),
+            use_contact_point=safe_bool("use_contact_point", True),
+            use_dynamic_overlap=safe_bool("use_dynamic_overlap", True),
+            roi_crop=safe_bool("roi_crop", True),
         )
 
     def report_slot_state(self, slot_id: str, new_state: str,
@@ -550,11 +612,12 @@ class CameraStream(threading.Thread):
 # INFERENCE THREAD
 # =========================================================
 class InferenceWorker(threading.Thread):
-    def __init__(self, streams: list[CameraStream], model, config: AppConfig):
+    def __init__(self, streams: list[CameraStream], model, config: AppConfig, rois_provider: Callable[[int], list] | None = None):
         super().__init__(daemon=True)
         self.streams    = streams
         self.model      = model
         self.config     = config
+        self.rois_provider = rois_provider or (lambda _: [])
         self._frames    = [None] * len(streams)
         self._boxes     = [[] for _ in streams]
         self._frame_ids = [0] * len(streams)
@@ -572,25 +635,98 @@ class InferenceWorker(threading.Thread):
         l = self._clahe.apply(l)
         return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
 
+    def _get_crop_box(self, cam_idx: int, polygons: list) -> tuple[int, int, int, int] | None:
+        """Returns (rx_min, ry_min, rx_max, ry_max) in 800x450 space."""
+        all_pts = []
+        for poly in polygons:
+            arr = np.array(poly, dtype=np.int32)
+            if arr.ndim == 2 and arr.shape[0] >= 3:
+                all_pts.append(arr)
+        if not all_pts:
+            return None
+
+        concat_pts = np.concatenate(all_pts, axis=0)
+        x_min, y_min = concat_pts[:, 0].min(), concat_pts[:, 1].min()
+        x_max, y_max = concat_pts[:, 0].max(), concat_pts[:, 1].max()
+
+        # Add 5% margin
+        w = x_max - x_min
+        h = y_max - y_min
+        margin_x = int(w * 0.05)
+        margin_y = int(h * 0.05)
+
+        rx_min = max(0, x_min - margin_x)
+        ry_min = max(0, y_min - margin_y)
+        rx_max = min(INFER_W, x_max + margin_x)
+        ry_max = min(INFER_H, y_max + margin_y)
+
+        # Ensure it has a valid width and height
+        if rx_max - rx_min < 10 or ry_max - ry_min < 10:
+            return None
+
+        return int(rx_min), int(ry_min), int(rx_max), int(ry_max)
+
     def run(self):
+        last_infer_time = [0.0] * len(self.streams)
         while self.running:
             processed_any = False
+            now = time.time()
             for cam_idx, stream in enumerate(self.streams):
+                if now - last_infer_time[cam_idx] < self.config.inference_interval:
+                    continue
                 frame = stream.read()
                 if frame is None:
                     continue
                 processed_any = True
-                resized  = cv2.resize(frame, (INFER_W, INFER_H))
-                enhanced = self._enhance(resized)
-                preds    = self.model.predict(enhanced, conf=self.config.confidence,
-                                              classes=VEHICLE_CLASSES, verbose=False)
-                boxes = [
+                last_infer_time[cam_idx] = now
+
+                orig_h, orig_w = frame.shape[:2]
+                resized = cv2.resize(frame, (INFER_W, INFER_H))
+
+                polygons = self.rois_provider(cam_idx)
+                crop_box = self._get_crop_box(cam_idx, polygons) if (self.config.roi_crop and polygons) else None
+
+                if crop_box is not None:
+                    rx_min, ry_min, rx_max, ry_max = crop_box
+                    # Map to original frame space
+                    scale_x = orig_w / INFER_W
+                    scale_y = orig_h / INFER_H
+                    ox_min = int(rx_min * scale_x)
+                    oy_min = int(ry_min * scale_y)
+                    ox_max = int(rx_max * scale_x)
+                    oy_max = int(ry_max * scale_y)
+
+                    cropped = frame[oy_min:oy_max, ox_min:ox_max]
+                    input_frame = cv2.resize(cropped, (INFER_W, INFER_H))
+                else:
+                    input_frame = resized
+
+                enhanced = self._enhance(input_frame)
+                preds = self.model.predict(enhanced, conf=self.config.confidence,
+                                           classes=VEHICLE_CLASSES, verbose=False)
+                raw_boxes = [
                     (int(x1), int(y1), int(x2), int(y2), float(conf))
                     for r in preds
                     for (x1, y1, x2, y2), conf in zip(
                         r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()
                     )
                 ]
+
+                # Map bounding boxes back to full space if cropped
+                if crop_box is not None:
+                    rx_min, ry_min, rx_max, ry_max = crop_box
+                    crop_w = rx_max - rx_min
+                    crop_h = ry_max - ry_min
+                    boxes = []
+                    for cx1, cy1, cx2, cy2, conf in raw_boxes:
+                        x1 = rx_min + (cx1 / INFER_W) * crop_w
+                        y1 = ry_min + (cy1 / INFER_H) * crop_h
+                        x2 = rx_min + (cx2 / INFER_W) * crop_w
+                        y2 = ry_min + (cy2 / INFER_H) * crop_h
+                        boxes.append((int(x1), int(y1), int(x2), int(y2), conf))
+                else:
+                    boxes = raw_boxes
+
                 with self._lock:
                     self._frames[cam_idx]    = resized   # natural image for display
                     self._boxes[cam_idx]     = boxes
@@ -625,20 +761,10 @@ class HeadlessRunner:
         self.camera_meta = camera_meta or []
         self.state       = SharedState()
         self._reload_flag = threading.Event()
-        self.api         = ParkingAPI(
-            self.state, config.api_host, config.api_port, len(camera_urls),
-            db=db if db and db.available else None,
-            lot_id=lot_id,
-            camera_meta=camera_meta,
-            on_regions_changed=self._reload_slots,
-        )
-        self.streams     = [CameraStream(u) for u in camera_urls]
-        self.model       = YOLO(model_path)
-        self.worker      = InferenceWorker(self.streams, self.model, config)
+        self.db_logger   = SupabaseLogger(db) if db and db.available else None
 
         self.camera_ids  = [c["id"] for c in self.camera_meta] if self.camera_meta \
                            else [None] * len(camera_urls)
-        self.db_logger   = SupabaseLogger(db) if db and db.available else None
 
         self.slot_rois:        list = [[] for _ in camera_urls]
         self.slot_state:       dict = {}
@@ -651,6 +777,20 @@ class HeadlessRunner:
         self.running = True
 
         self._load_slots(slot_regions or [])
+
+        self.api         = ParkingAPI(
+            self.state, config.api_host, config.api_port, len(camera_urls),
+            db=db if db and db.available else None,
+            lot_id=lot_id,
+            camera_meta=camera_meta,
+            on_regions_changed=self._reload_slots,
+        )
+        self.streams     = [CameraStream(u) for u in camera_urls]
+        self.model       = YOLO(model_path)
+        self.worker      = InferenceWorker(
+            self.streams, self.model, config,
+            rois_provider=lambda cam_idx: self.slot_rois[cam_idx]
+        )
 
     def _load_slots(self, slot_regions: list[dict]):
         if slot_regions:
@@ -756,12 +896,13 @@ class HeadlessRunner:
             return None
 
     @staticmethod
-    def _box_poly_overlap_ratio(pts: np.ndarray,
-                                 x1: int, y1: int, x2: int, y2: int) -> float:
-        """Fraction of the slot polygon area covered by the bounding box."""
+    def _box_poly_overlap_ratios(pts: np.ndarray,
+                                  x1: int, y1: int, x2: int, y2: int) -> tuple[float, float]:
+        """Fraction of the slot polygon area covered by the bounding box (ios) and vice-versa (iov)."""
         poly_area = cv2.contourArea(pts)
-        if poly_area < 1:
-            return 0.0
+        box_area = (x2 - x1) * (y2 - y1)
+        if poly_area < 1 or box_area < 1:
+            return 0.0, 0.0
         px_min, py_min = int(pts[:, 0].min()), int(pts[:, 1].min())
         px_max, py_max = int(pts[:, 0].max()), int(pts[:, 1].max())
         ix1 = max(x1, px_min)
@@ -769,12 +910,14 @@ class HeadlessRunner:
         ix2 = min(x2, px_max)
         iy2 = min(y2, py_max)
         if ix2 <= ix1 or iy2 <= iy1:
-            return 0.0
+            return 0.0, 0.0
         w, h = ix2 - ix1, iy2 - iy1
         mask = np.zeros((h, w), dtype=np.uint8)
         shifted = (pts - np.array([ix1, iy1])).astype(np.int32)
         cv2.fillPoly(mask, [shifted], 1)
-        return int(mask.sum()) / poly_area
+        overlap_area = int(mask.sum())
+        return (overlap_area / poly_area), (overlap_area / box_area)
+
 
     def _annotate(self, cam_idx: int, display, boxes):
         for bx1, by1, bx2, by2, conf in boxes:
@@ -825,16 +968,19 @@ class HeadlessRunner:
                 pts      = self._poly_array(polygon)
                 if pts is None:
                     continue
-                hits = [
-                    b for b in boxes
-                    if (
-                        self._box_poly_overlap_ratio(pts, b[0], b[1], b[2], b[3])
-                        >= overlap_threshold
-                        and cv2.pointPolygonTest(
-                            pts, ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2), True
-                        ) >= -20
-                    )
-                ]
+                hits = []
+                for b in boxes:
+                    ios, iov = self._box_poly_overlap_ratios(pts, b[0], b[1], b[2], b[3])
+                    pt = ((b[0] + b[2]) / 2, b[3]) if self.config.use_contact_point else ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+                    point_ok = cv2.pointPolygonTest(pts, pt, True) >= -20
+                    if self.config.use_dynamic_overlap:
+                        overlap_ok = (ios >= overlap_threshold) or (iov >= 0.80)
+                    else:
+                        overlap_ok = (ios >= overlap_threshold)
+
+                    if overlap_ok and point_ok:
+                        hits.append(b)
+
                 detected = len(hits) > 0
                 self.slot_confidence[key] = max((b[4] for b in hits), default=0.0)
 
@@ -851,7 +997,7 @@ class HeadlessRunner:
                 currently = self.slot_state[key]
                 # Fast-clear: N consecutive frames with zero hits overrides the vote window.
                 # This fixes "slot stuck occupied while no detection box covers it."
-                if currently and self.slot_consec_free[key] >= debounce_free:
+                if currently and self.slot_consec_free[key] >= self.config.fast_clear_frames:
                     stable = False
                 elif not currently and true_votes >= debounce_enter:
                     stable = True

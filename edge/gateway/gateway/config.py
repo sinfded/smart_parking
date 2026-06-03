@@ -31,5 +31,12 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    camera_inference_interval: float = 1.0
+    camera_fast_clear_frames: int = 2
+    camera_use_contact_point: bool = True
+    camera_use_dynamic_overlap: bool = True
+    camera_roi_crop: bool = True
+
 
 settings = Settings()  # type: ignore[call-arg]
+

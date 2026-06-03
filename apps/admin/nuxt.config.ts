@@ -21,6 +21,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       gatewayUrl: "",
+      forecastUrl: "",
     },
   },
 });
