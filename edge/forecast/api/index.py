@@ -11,7 +11,7 @@ app = FastAPI(title="Smart Parking Forecasting API", version="1.0")
 
 # Resolve path to the pickle file
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "parking_forecast_model.pkl"))
+MODEL_PATH = os.path.abspath(os.path.join(BASE_DIR, "parking_forecast_model.pkl"))
 
 model = None
 if os.path.exists(MODEL_PATH):
